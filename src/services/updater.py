@@ -63,8 +63,16 @@ class PriceUpdater(QThread):
             result = self.metals_api.get_price(asset.symbol)
         elif asset.asset_type == 'stock':
             result = self.stocks_api.get_price(asset.symbol)
-        elif asset.asset_type == 'realestate':
-            # Real estate prices are manual, skip auto-update
+        elif asset.asset_type == 'retirement':
+            # Retirement accounts track fund performance
+            # Return the fund price so we can calculate performance
+            result = self.stocks_api.get_price(asset.symbol)
+            if result.success:
+                return self._calculate_retirement_balance(asset, result.price)
+            return None
+        elif asset.asset_type in ('realestate', 'cash'):
+            # Real estate and cash are manual balance-only
+            # Skip auto-update - user enters the balance directly
             return None
         else:
             # Try stock API for 'other' types with symbols
@@ -73,6 +81,40 @@ class PriceUpdater(QThread):
         if result.success:
             return result.price
         return None
+
+    def _calculate_retirement_balance(self, asset: Asset, current_fund_price: float) -> Optional[float]:
+        """Calculate updated retirement balance based on fund performance.
+
+        Uses baseline_price (fund price when balance was entered) to calculate
+        percentage change and apply to the stored balance.
+        """
+        # If no baseline price set, store current price as baseline and return current balance
+        if asset.baseline_price <= 0:
+            # First time tracking - set baseline and return current balance unchanged
+            from ..database.operations import AssetOperations
+            asset.baseline_price = current_fund_price
+            AssetOperations.update(asset)
+            return asset.current_price  # Return unchanged balance
+
+        # Calculate percentage change from baseline
+        pct_change = (current_fund_price - asset.baseline_price) / asset.baseline_price
+
+        # The "base balance" is the balance at time of baseline (stored in current_price)
+        # We need to track the original balance separately, so we'll use purchase_price for this
+        # Since retirement accounts don't normally use purchase_price, we can repurpose it
+
+        # If purchase_price is 0, this is the first update - store current balance as base
+        if asset.purchase_price <= 0:
+            from ..database.operations import AssetOperations
+            asset.purchase_price = asset.current_price  # Store original balance
+            AssetOperations.update(asset)
+            return asset.current_price
+
+        # Calculate new balance: original_balance * (1 + pct_change)
+        base_balance = asset.purchase_price
+        new_balance = base_balance * (1 + pct_change)
+
+        return new_balance
 
     def stop(self):
         """Stop the update thread."""

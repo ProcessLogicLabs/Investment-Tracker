@@ -92,6 +92,8 @@ class AssetTableWidget(QWidget):
             'metal': 'Metal',
             'stock': 'Stock',
             'realestate': 'Real Estate',
+            'retirement': '401k/IRA',
+            'cash': 'Cash',
             'other': 'Other'
         }.get(asset.asset_type, asset.asset_type)
         self.table.setItem(row, 1, QTableWidgetItem(type_display))
@@ -99,30 +101,43 @@ class AssetTableWidget(QWidget):
         # Symbol
         self.table.setItem(row, 2, QTableWidgetItem(asset.symbol or ''))
 
-        # Quantity with unit (show total weight for metals)
-        qty_str = f"{asset.quantity:,.4f}".rstrip('0').rstrip('.')
-        if asset.asset_type == 'metal' and asset.weight_per_unit != 1.0:
-            # Show count and total weight for fractional metals
-            total_weight = asset.total_weight
-            qty_str = f"{qty_str} pcs ({total_weight:,.4f}".rstrip('0').rstrip('.') + " oz)"
-        elif asset.unit:
-            qty_str = f"{qty_str} {asset.unit}"
+        # Quantity with unit (show total weight for metals, hide for balance-only)
+        if asset.is_balance_only:
+            qty_str = "—"  # Balance-only assets don't have quantity
+        else:
+            qty_str = f"{asset.quantity:,.4f}".rstrip('0').rstrip('.')
+            if asset.asset_type == 'metal' and asset.weight_per_unit != 1.0:
+                # Show count and total weight for fractional metals
+                total_weight = asset.total_weight
+                qty_str = f"{qty_str} pcs ({total_weight:,.4f}".rstrip('0').rstrip('.') + " oz)"
+            elif asset.unit:
+                qty_str = f"{qty_str} {asset.unit}"
         qty_item = QTableWidgetItem(qty_str)
         qty_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.table.setItem(row, 3, qty_item)
 
-        # Purchase Price
-        pp_item = QTableWidgetItem(f"${asset.purchase_price:,.2f}")
+        # Purchase Price (hide for balance-only)
+        if asset.is_balance_only:
+            pp_item = QTableWidgetItem("—")
+        else:
+            pp_item = QTableWidgetItem(f"${asset.purchase_price:,.2f}")
         pp_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.table.setItem(row, 4, pp_item)
 
-        # Current Price
-        cp_item = QTableWidgetItem(f"${asset.current_price:,.2f}")
+        # Current Price (shows balance for balance-only assets)
+        if asset.is_balance_only:
+            cp_item = QTableWidgetItem(f"${asset.current_price:,.2f}")
+            cp_item.setToolTip("Current Balance")
+        else:
+            cp_item = QTableWidgetItem(f"${asset.current_price:,.2f}")
         cp_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.table.setItem(row, 5, cp_item)
 
-        # Total Cost
-        tc_item = QTableWidgetItem(f"${asset.total_cost:,.2f}")
+        # Total Cost (hide for balance-only)
+        if asset.is_balance_only:
+            tc_item = QTableWidgetItem("—")
+        else:
+            tc_item = QTableWidgetItem(f"${asset.total_cost:,.2f}")
         tc_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.table.setItem(row, 6, tc_item)
 
@@ -131,24 +146,34 @@ class AssetTableWidget(QWidget):
         cv_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.table.setItem(row, 7, cv_item)
 
-        # Gain/Loss
-        gl = asset.gain_loss
-        gl_item = QTableWidgetItem(f"${gl:+,.2f}")
+        # Gain/Loss (N/A for balance-only, unless retirement with tracking)
+        has_retirement_tracking = (asset.asset_type == 'retirement' and
+                                   asset.baseline_price > 0 and asset.purchase_price > 0)
+        if asset.is_balance_only and not has_retirement_tracking:
+            gl_item = QTableWidgetItem("N/A")
+            gl_item.setForeground(QBrush(QColor('#888888')))  # Gray
+        else:
+            gl = asset.gain_loss
+            gl_item = QTableWidgetItem(f"${gl:+,.2f}")
+            if gl > 0:
+                gl_item.setForeground(QBrush(QColor('#2e7d32')))  # Green
+            elif gl < 0:
+                gl_item.setForeground(QBrush(QColor('#c62828')))  # Red
         gl_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        if gl > 0:
-            gl_item.setForeground(QBrush(QColor('#2e7d32')))  # Green
-        elif gl < 0:
-            gl_item.setForeground(QBrush(QColor('#c62828')))  # Red
         self.table.setItem(row, 8, gl_item)
 
-        # Gain/Loss %
-        glp = asset.gain_loss_percent
-        glp_item = QTableWidgetItem(f"{glp:+.2f}%")
+        # Gain/Loss % (N/A for balance-only, unless retirement with tracking)
+        if asset.is_balance_only and not has_retirement_tracking:
+            glp_item = QTableWidgetItem("N/A")
+            glp_item.setForeground(QBrush(QColor('#888888')))  # Gray
+        else:
+            glp = asset.gain_loss_percent
+            glp_item = QTableWidgetItem(f"{glp:+.2f}%")
+            if glp > 0:
+                glp_item.setForeground(QBrush(QColor('#2e7d32')))  # Green
+            elif glp < 0:
+                glp_item.setForeground(QBrush(QColor('#c62828')))  # Red
         glp_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        if glp > 0:
-            glp_item.setForeground(QBrush(QColor('#2e7d32')))  # Green
-        elif glp < 0:
-            glp_item.setForeground(QBrush(QColor('#c62828')))  # Red
         self.table.setItem(row, 9, glp_item)
 
         # Last Updated
