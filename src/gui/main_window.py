@@ -1,9 +1,9 @@
 """Main application window for Asset Tracker."""
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QToolBar, QStatusBar, QMessageBox, QFileDialog, QProgressBar,
-    QLabel
+    QLabel, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QIcon
@@ -49,25 +49,36 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(10, 10, 10, 10)
 
-        # Summary panel at top
-        self.summary_panel = SummaryPanel()
-        main_layout.addWidget(self.summary_panel)
+        # Main tab widget for Portfolio, Summary, and Charts
+        self.main_tabs = QTabWidget()
+        self.main_tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        # Splitter for table and charts
-        self.splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        # Asset table (left side)
+        # Tab 1: Portfolio (Asset Table)
+        portfolio_tab = QWidget()
+        portfolio_layout = QVBoxLayout(portfolio_tab)
+        portfolio_layout.setContentsMargins(5, 5, 5, 5)
         self.asset_table = AssetTableWidget()
-        self.splitter.addWidget(self.asset_table)
+        portfolio_layout.addWidget(self.asset_table)
+        self.main_tabs.addTab(portfolio_tab, "Portfolio")
 
-        # Charts (right side)
+        # Tab 2: Summary
+        summary_tab = QWidget()
+        summary_layout = QVBoxLayout(summary_tab)
+        summary_layout.setContentsMargins(5, 5, 5, 5)
+        self.summary_panel = SummaryPanel()
+        summary_layout.addWidget(self.summary_panel)
+        summary_layout.addStretch()  # Push summary to top
+        self.main_tabs.addTab(summary_tab, "Summary")
+
+        # Tab 3: Charts
+        charts_tab = QWidget()
+        charts_layout = QVBoxLayout(charts_tab)
+        charts_layout.setContentsMargins(5, 5, 5, 5)
         self.chart_widget = ChartWidget()
-        self.splitter.addWidget(self.chart_widget)
+        charts_layout.addWidget(self.chart_widget)
+        self.main_tabs.addTab(charts_tab, "Charts")
 
-        # Set splitter sizes (60% table, 40% charts)
-        self.splitter.setSizes([600, 400])
-
-        main_layout.addWidget(self.splitter)
+        main_layout.addWidget(self.main_tabs)
 
     def _setup_menu(self):
         """Set up the menu bar."""
@@ -116,12 +127,20 @@ class MainWindow(QMainWindow):
         # View menu
         view_menu = menubar.addMenu("&View")
 
-        toggle_charts_action = QAction("Show &Charts", self)
-        toggle_charts_action.setCheckable(True)
-        toggle_charts_action.setChecked(True)
-        toggle_charts_action.triggered.connect(self._toggle_charts)
-        view_menu.addAction(toggle_charts_action)
-        self.toggle_charts_action = toggle_charts_action
+        portfolio_action = QAction("&Portfolio", self)
+        portfolio_action.setShortcut("Ctrl+1")
+        portfolio_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(0))
+        view_menu.addAction(portfolio_action)
+
+        summary_action = QAction("&Summary", self)
+        summary_action.setShortcut("Ctrl+2")
+        summary_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(1))
+        view_menu.addAction(summary_action)
+
+        charts_action = QAction("&Charts", self)
+        charts_action.setShortcut("Ctrl+3")
+        charts_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(2))
+        view_menu.addAction(charts_action)
 
         # Tools menu
         tools_menu = menubar.addMenu("&Tools")
@@ -305,10 +324,6 @@ class MainWindow(QMainWindow):
         if total > 0:
             self.progress_bar.setValue(int(current / total * 100))
 
-    def _toggle_charts(self, checked: bool):
-        """Toggle charts panel visibility."""
-        self.chart_widget.setVisible(checked)
-
     def _export_to_excel(self):
         """Export portfolio to Excel."""
         filename, _ = QFileDialog.getSaveFileName(
@@ -343,11 +358,6 @@ class MainWindow(QMainWindow):
             # Apply new settings
             self.updater.stop()
             self._start_updates()
-
-            # Update charts visibility
-            show_charts = SettingsOperations.get('show_charts', 'true') == 'true'
-            self.chart_widget.setVisible(show_charts)
-            self.toggle_charts_action.setChecked(show_charts)
 
     def _show_about(self):
         """Show about dialog."""

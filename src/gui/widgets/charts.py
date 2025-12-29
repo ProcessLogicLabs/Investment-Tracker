@@ -22,6 +22,14 @@ class MplCanvas(FigureCanvas):
         super().__init__(self.fig)
         self.setParent(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumSize(200, 150)
+        self.updateGeometry()
+
+    def resizeEvent(self, event):
+        """Handle resize events to redraw the figure."""
+        super().resizeEvent(event)
+        self.fig.tight_layout()
+        self.draw()
 
 
 class AllocationPieChart(QWidget):
@@ -29,6 +37,7 @@ class AllocationPieChart(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -91,6 +100,7 @@ class PerformanceBarChart(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -134,6 +144,7 @@ class ValueHistoryChart(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -200,8 +211,10 @@ class SpotPriceHistoryChart(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.worker = None
         self.historical_data = {}
+        self._secondary_axis = None  # Track secondary axis for proper cleanup
         self._setup_ui()
 
     def _setup_ui(self):
@@ -316,7 +329,10 @@ class SpotPriceHistoryChart(QWidget):
 
     def _update_chart_display(self):
         """Update the chart with current data and selections."""
-        self.canvas.axes.clear()
+        # Clear the figure completely to remove any secondary axes
+        self.canvas.fig.clear()
+        self.canvas.axes = self.canvas.fig.add_subplot(111)
+        self._secondary_axis = None
 
         if not self.historical_data:
             self.canvas.axes.text(
@@ -359,6 +375,7 @@ class SpotPriceHistoryChart(QWidget):
 
         if has_gold_platinum and has_silver:
             ax2 = ax1.twinx()
+            self._secondary_axis = ax2
 
         plotted = False
         for metal in selected:
@@ -424,6 +441,7 @@ class ChartWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -432,6 +450,7 @@ class ChartWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.tabs = QTabWidget()
+        self.tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self.allocation_chart = AllocationPieChart()
         self.tabs.addTab(self.allocation_chart, "Allocation")
