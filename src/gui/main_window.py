@@ -24,6 +24,7 @@ from .dialogs.add_income import AddIncomeDialog
 from .dialogs.add_expense import AddExpenseDialog
 from .dialogs.settings import SettingsDialog
 from .dialogs.analysis_report import AnalysisReportDialog
+from .dialogs.debt_payoff_simulation import DebtPayoffSimulationWizard
 from ..utils.export import ExcelExporter
 
 
@@ -255,6 +256,11 @@ class MainWindow(QMainWindow):
         analysis_report_action.setShortcut("Ctrl+R")
         analysis_report_action.triggered.connect(self._show_analysis_report)
         tools_menu.addAction(analysis_report_action)
+
+        debt_simulation_action = QAction("&Debt Payoff Simulation...", self)
+        debt_simulation_action.setShortcut("Ctrl+D")
+        debt_simulation_action.triggered.connect(self._show_debt_simulation)
+        tools_menu.addAction(debt_simulation_action)
 
         tools_menu.addSeparator()
 
@@ -720,6 +726,11 @@ class MainWindow(QMainWindow):
         """Show comprehensive financial analysis report."""
         dialog = AnalysisReportDialog(self)
         dialog.exec()
+
+    def _show_debt_simulation(self):
+        """Show debt payoff simulation wizard."""
+        wizard = DebtPayoffSimulationWizard(self)
+        wizard.exec()
 
     def _show_settings(self):
         """Show settings dialog."""
