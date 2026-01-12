@@ -8,12 +8,14 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QDoubleSpinBox,
     QComboBox, QLineEdit, QTextEdit, QGroupBox, QFormLayout,
     QCheckBox, QAbstractItemView, QPushButton, QFileDialog, QMessageBox,
-    QSlider, QFrame, QSplitter, QSizePolicy
+    QSlider, QFrame, QSplitter, QSizePolicy, QScrollArea, QWidget,
+    QGridLayout, QTabWidget
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QBrush
 from PyQt6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries
-from ...database.operations import AssetOperations, LiabilityOperations, IncomeOperations
+from ...database.operations import AssetOperations, LiabilityOperations, IncomeOperations, SettingsOperations
+import json
 
 
 # 2024 Long-term capital gains thresholds
@@ -41,6 +43,9 @@ HISTORICAL_RETURNS = {
     'aggressive': 0.10,      # 10% - stock heavy (S&P 500 avg ~10% since 1926)
 }
 DEFAULT_RETURN_SCENARIO = 'moderate'
+
+# Settings keys for saving/loading simulation preferences
+SIMULATION_SETTINGS_KEY = 'debt_payoff_simulation'
 
 
 def calculate_401k_future_value(monthly_contribution: float, years: int,
@@ -683,6 +688,44 @@ class AssetSelectionPage(QWizardPage):
         return any(cb.isChecked() and self.spinboxes[row].value() > 0
                    for row, cb in self.checkboxes.items())
 
+    def get_selection_data(self) -> Dict[str, float]:
+        """Get current selections as a dict of asset_id -> quantity for saving."""
+        selections = {}
+        for row in range(self.asset_table.rowCount()):
+            if self.checkboxes[row].isChecked():
+                asset = self.asset_table.item(row, 1).data(Qt.ItemDataRole.UserRole)
+                qty = self.spinboxes[row].value()
+                if qty > 0:
+                    selections[str(asset.id)] = qty
+        return selections
+
+    def restore_selections(self, selections: Dict[str, float]):
+        """Restore selections from saved data."""
+        # Build lookup of asset_id -> row
+        id_to_row = {}
+        for row in range(self.asset_table.rowCount()):
+            asset = self.asset_table.item(row, 1).data(Qt.ItemDataRole.UserRole)
+            id_to_row[str(asset.id)] = row
+
+        # Clear all selections first
+        for row, checkbox in self.checkboxes.items():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(False)
+            checkbox.blockSignals(False)
+
+        # Restore saved selections
+        for asset_id, qty in selections.items():
+            if asset_id in id_to_row:
+                row = id_to_row[asset_id]
+                self.checkboxes[row].blockSignals(True)
+                self.checkboxes[row].setChecked(True)
+                self.checkboxes[row].blockSignals(False)
+                self.spinboxes[row].blockSignals(True)
+                self.spinboxes[row].setValue(min(qty, self.spinboxes[row].maximum()))
+                self.spinboxes[row].blockSignals(False)
+
+        self._update_totals()
+
 
 class TaxSettingsPage(QWizardPage):
     """Wizard page for tax settings with interactive 401k slider and chart."""
@@ -693,23 +736,33 @@ class TaxSettingsPage(QWizardPage):
         self.setSubTitle("Configure tax optimization, 401k contributions, and emergency fund priority.")
         self._selected_assets = []  # Will be populated from previous page
         self._liabilities = []
+        self._silver_price_multiplier = 1.0  # Multiplier from silver outlook slider (1.0 = current price)
         self._setup_ui()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
 
         # Create horizontal splitter for controls and chart
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
 
-        # Left panel - Controls
-        left_panel = QFrame()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 10, 0)
+        # Left panel - Controls in a scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setMinimumWidth(320)
+
+        scroll_content = QWidget()
+        left_layout = QVBoxLayout(scroll_content)
+        left_layout.setContentsMargins(4, 4, 8, 4)
+        left_layout.setSpacing(8)
 
         # Income settings (compact)
         income_group = QGroupBox("Income & Filing")
         income_layout = QFormLayout(income_group)
-        income_layout.setSpacing(8)
+        income_layout.setSpacing(4)
+        income_layout.setContentsMargins(8, 12, 8, 8)
 
         self.gross_income_input = QDoubleSpinBox()
         self.gross_income_input.setRange(0, 10000000)
@@ -730,7 +783,7 @@ class TaxSettingsPage(QWizardPage):
             "Pre-tax contributions reduce taxable income and increase LTCG headroom."
         )
         self.current_401k_input.valueChanged.connect(self._on_inputs_changed)
-        income_layout.addRow("Current 401k Contrib:", self.current_401k_input)
+        income_layout.addRow("401k Contrib:", self.current_401k_input)
 
         self.filing_status = QComboBox()
         self.filing_status.addItem("Single", "single")
@@ -739,7 +792,7 @@ class TaxSettingsPage(QWizardPage):
         self.filing_status.currentIndexChanged.connect(self._on_inputs_changed)
         income_layout.addRow("Filing Status:", self.filing_status)
 
-        self.catchup_checkbox = QCheckBox("Age 50+")
+        self.catchup_checkbox = QCheckBox("Age 50+ (catchup)")
         self.catchup_checkbox.stateChanged.connect(self._update_slider_range)
         income_layout.addRow("", self.catchup_checkbox)
 
@@ -748,10 +801,12 @@ class TaxSettingsPage(QWizardPage):
         # 401k Slider
         slider_group = QGroupBox("Additional 401k Contribution")
         slider_layout = QVBoxLayout(slider_group)
+        slider_layout.setSpacing(4)
+        slider_layout.setContentsMargins(8, 12, 8, 8)
 
         # Slider value label
         self.slider_value_label = QLabel("$0")
-        self.slider_value_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #0066cc;")
+        self.slider_value_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #0066cc;")
         self.slider_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         slider_layout.addWidget(self.slider_value_label)
 
@@ -766,6 +821,7 @@ class TaxSettingsPage(QWizardPage):
 
         # Min/Max labels
         range_layout = QHBoxLayout()
+        range_layout.setContentsMargins(0, 0, 0, 0)
         self.min_label = QLabel("$0")
         self.max_label = QLabel(f"${MAX_401K_CONTRIBUTION:,}")
         range_layout.addWidget(self.min_label)
@@ -775,10 +831,11 @@ class TaxSettingsPage(QWizardPage):
 
         # Quick buttons
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(4)
         self.optimal_btn = QPushButton("Optimal")
         self.optimal_btn.setToolTip("Set to optimal amount for 0% LTCG")
         self.optimal_btn.clicked.connect(self._set_optimal)
-        self.max_btn = QPushButton("Maximum")
+        self.max_btn = QPushButton("Max")
         self.max_btn.setToolTip("Set to maximum allowed")
         self.max_btn.clicked.connect(self._set_maximum)
         self.reset_btn = QPushButton("Reset")
@@ -791,11 +848,12 @@ class TaxSettingsPage(QWizardPage):
         left_layout.addWidget(slider_group)
 
         # Emergency Fund Priority
-        efund_group = QGroupBox("Emergency Fund Priority")
+        efund_group = QGroupBox("Emergency Fund")
         efund_layout = QFormLayout(efund_group)
-        efund_layout.setSpacing(8)
+        efund_layout.setSpacing(4)
+        efund_layout.setContentsMargins(8, 12, 8, 8)
 
-        self.efund_checkbox = QCheckBox("Include emergency fund goal")
+        self.efund_checkbox = QCheckBox("Include e-fund goal")
         self.efund_checkbox.setToolTip("Include emergency fund in the debt payoff strategy")
         self.efund_checkbox.stateChanged.connect(self._on_efund_changed)
         efund_layout.addRow("", self.efund_checkbox)
@@ -805,10 +863,10 @@ class TaxSettingsPage(QWizardPage):
         self.efund_target_input.setDecimals(0)
         self.efund_target_input.setPrefix("$")
         self.efund_target_input.setSingleStep(500)
-        self.efund_target_input.setValue(1000)  # Default starter emergency fund
+        self.efund_target_input.setValue(1000)
         self.efund_target_input.setEnabled(False)
         self.efund_target_input.valueChanged.connect(self._on_inputs_changed)
-        efund_layout.addRow("Target Amount:", self.efund_target_input)
+        efund_layout.addRow("Target:", self.efund_target_input)
 
         self.efund_current_input = QDoubleSpinBox()
         self.efund_current_input.setRange(0, 100000)
@@ -818,124 +876,329 @@ class TaxSettingsPage(QWizardPage):
         self.efund_current_input.setValue(0)
         self.efund_current_input.setEnabled(False)
         self.efund_current_input.valueChanged.connect(self._on_inputs_changed)
-        efund_layout.addRow("Current Savings:", self.efund_current_input)
+        efund_layout.addRow("Current:", self.efund_current_input)
 
-        # Months of expenses calculator
-        self.efund_months_label = QLabel("0 months of expenses")
-        self.efund_months_label.setStyleSheet("color: #666; font-size: 10px;")
+        self.efund_months_label = QLabel("0 mo expenses")
+        self.efund_months_label.setStyleSheet("color: #666; font-size: 9px;")
         efund_layout.addRow("", self.efund_months_label)
 
         # Quick preset buttons
         efund_btn_layout = QHBoxLayout()
-        self.efund_1mo_btn = QPushButton("1 mo")
-        self.efund_1mo_btn.setToolTip("Set target to 1 month of expenses")
+        efund_btn_layout.setSpacing(2)
+        self.efund_1mo_btn = QPushButton("1mo")
+        self.efund_1mo_btn.setMaximumWidth(40)
         self.efund_1mo_btn.clicked.connect(lambda: self._set_efund_months(1))
         self.efund_1mo_btn.setEnabled(False)
-        self.efund_3mo_btn = QPushButton("3 mo")
-        self.efund_3mo_btn.setToolTip("Set target to 3 months of expenses")
+        self.efund_3mo_btn = QPushButton("3mo")
+        self.efund_3mo_btn.setMaximumWidth(40)
         self.efund_3mo_btn.clicked.connect(lambda: self._set_efund_months(3))
         self.efund_3mo_btn.setEnabled(False)
-        self.efund_6mo_btn = QPushButton("6 mo")
-        self.efund_6mo_btn.setToolTip("Set target to 6 months of expenses")
+        self.efund_6mo_btn = QPushButton("6mo")
+        self.efund_6mo_btn.setMaximumWidth(40)
         self.efund_6mo_btn.clicked.connect(lambda: self._set_efund_months(6))
         self.efund_6mo_btn.setEnabled(False)
         efund_btn_layout.addWidget(self.efund_1mo_btn)
         efund_btn_layout.addWidget(self.efund_3mo_btn)
         efund_btn_layout.addWidget(self.efund_6mo_btn)
+        efund_btn_layout.addStretch()
         efund_layout.addRow("Presets:", efund_btn_layout)
 
-        # Allocation mode
         self.efund_mode_combo = QComboBox()
         self.efund_mode_combo.addItem("Lump sum first", "lump_sum")
-        self.efund_mode_combo.addItem("Include in avalanche", "avalanche")
+        self.efund_mode_combo.addItem("In avalanche", "avalanche")
         self.efund_mode_combo.setToolTip(
             "Lump sum: Allocate to e-fund before any debt payments\n"
             "Avalanche: Treat e-fund as a 'virtual debt' with priority rate"
         )
         self.efund_mode_combo.setEnabled(False)
         self.efund_mode_combo.currentIndexChanged.connect(self._on_efund_mode_changed)
-        efund_layout.addRow("Allocation Mode:", self.efund_mode_combo)
+        efund_layout.addRow("Mode:", self.efund_mode_combo)
 
-        # Virtual interest rate for avalanche mode
         self.efund_rate_input = QDoubleSpinBox()
         self.efund_rate_input.setRange(0, 100)
         self.efund_rate_input.setDecimals(1)
         self.efund_rate_input.setSuffix("%")
         self.efund_rate_input.setSingleStep(1)
-        self.efund_rate_input.setValue(50.0)  # Default: high priority (higher than most debts)
-        self.efund_rate_input.setToolTip(
-            "Virtual interest rate for avalanche ordering.\n"
-            "Higher = higher priority (paid before lower-rate debts)\n"
-            "e.g., 50% = pay e-fund before any debt under 50% APR\n"
-            "Set to 0% to pay e-fund last (after all debts)"
-        )
+        self.efund_rate_input.setValue(50.0)
+        self.efund_rate_input.setToolTip("Virtual rate for avalanche ordering")
         self.efund_rate_input.setEnabled(False)
         self.efund_rate_input.setVisible(False)
         self.efund_rate_input.valueChanged.connect(self._on_inputs_changed)
-        self.efund_rate_label = QLabel("Priority Rate:")
+        self.efund_rate_label = QLabel("Priority:")
         self.efund_rate_label.setVisible(False)
         efund_layout.addRow(self.efund_rate_label, self.efund_rate_input)
 
         left_layout.addWidget(efund_group)
 
-        # Results summary
-        results_group = QGroupBox("Current Selection Impact")
-        results_layout = QFormLayout(results_group)
-        results_layout.setSpacing(6)
+        # Debt-Free Goal Timeline
+        goal_group = QGroupBox("Debt-Free Goal")
+        goal_layout = QVBoxLayout(goal_group)
+        goal_layout.setSpacing(4)
+        goal_layout.setContentsMargins(8, 12, 8, 8)
 
+        self.goal_value_label = QLabel("No Goal Set")
+        self.goal_value_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #006600;")
+        self.goal_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        goal_layout.addWidget(self.goal_value_label)
+
+        self.goal_slider = QSlider(Qt.Orientation.Horizontal)
+        self.goal_slider.setRange(0, 120)
+        self.goal_slider.setValue(0)
+        self.goal_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.goal_slider.setTickInterval(12)
+        self.goal_slider.valueChanged.connect(self._on_goal_slider_changed)
+        goal_layout.addWidget(self.goal_slider)
+
+        goal_range_layout = QHBoxLayout()
+        goal_range_layout.setContentsMargins(0, 0, 0, 0)
+        goal_range_layout.addWidget(QLabel("None"))
+        goal_range_layout.addStretch()
+        goal_range_layout.addWidget(QLabel("10yr"))
+        goal_layout.addLayout(goal_range_layout)
+
+        self.goal_status_label = QLabel("")
+        self.goal_status_label.setStyleSheet("font-size: 10px;")
+        self.goal_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        goal_layout.addWidget(self.goal_status_label)
+
+        goal_btn_layout = QHBoxLayout()
+        goal_btn_layout.setSpacing(2)
+        for text, months in [("1Y", 12), ("2Y", 24), ("3Y", 36), ("5Y", 60)]:
+            btn = QPushButton(text)
+            btn.setMaximumWidth(35)
+            btn.clicked.connect(lambda checked, m=months: self.goal_slider.setValue(m))
+            goal_btn_layout.addWidget(btn)
+        self.goal_clear_btn = QPushButton("Clear")
+        self.goal_clear_btn.setMaximumWidth(45)
+        self.goal_clear_btn.clicked.connect(lambda: self.goal_slider.setValue(0))
+        goal_btn_layout.addWidget(self.goal_clear_btn)
+        goal_layout.addLayout(goal_btn_layout)
+
+        left_layout.addWidget(goal_group)
+
+        # Results summary using grid for better alignment
+        results_group = QGroupBox("Impact Summary")
+        results_grid = QGridLayout(results_group)
+        results_grid.setSpacing(4)
+        results_grid.setContentsMargins(8, 12, 8, 8)
+
+        row = 0
+        results_grid.addWidget(QLabel("Taxable Income:"), row, 0)
         self.taxable_income_label = QLabel("$0")
         self.taxable_income_label.setStyleSheet("font-weight: bold;")
-        results_layout.addRow("Taxable Income:", self.taxable_income_label)
+        results_grid.addWidget(self.taxable_income_label, row, 1)
 
+        row += 1
+        results_grid.addWidget(QLabel("0% LTCG Room:"), row, 0)
         self.headroom_label = QLabel("$0")
         self.headroom_label.setStyleSheet("font-weight: bold; color: green;")
-        results_layout.addRow("0% LTCG Headroom:", self.headroom_label)
+        results_grid.addWidget(self.headroom_label, row, 1)
 
+        row += 1
+        results_grid.addWidget(QLabel("Est. Tax:"), row, 0)
         self.tax_owed_label = QLabel("$0")
         self.tax_owed_label.setStyleSheet("font-weight: bold;")
-        results_layout.addRow("Est. Capital Gains Tax:", self.tax_owed_label)
+        results_grid.addWidget(self.tax_owed_label, row, 1)
 
+        row += 1
+        results_grid.addWidget(QLabel("Debt-Free In:"), row, 0)
         self.months_saved_label = QLabel("0")
         self.months_saved_label.setStyleSheet("font-weight: bold;")
-        results_layout.addRow("Months to Debt-Free:", self.months_saved_label)
+        results_grid.addWidget(self.months_saved_label, row, 1)
 
+        row += 1
+        results_grid.addWidget(QLabel("Cash Reduction:"), row, 0)
         self.monthly_reduction_label = QLabel("$0")
         self.monthly_reduction_label.setStyleSheet("color: #cc6600;")
-        results_layout.addRow("Monthly Cash Reduction:", self.monthly_reduction_label)
+        results_grid.addWidget(self.monthly_reduction_label, row, 1)
 
+        row += 1
+        results_grid.addWidget(QLabel("E-Fund Alloc:"), row, 0)
         self.efund_allocation_label = QLabel("$0")
         self.efund_allocation_label.setStyleSheet("font-weight: bold; color: #006699;")
-        results_layout.addRow("Emergency Fund Alloc:", self.efund_allocation_label)
+        results_grid.addWidget(self.efund_allocation_label, row, 1)
 
-        # 401k projection separator
-        results_layout.addRow(QLabel(""))  # spacer
+        # Separator
+        row += 1
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        results_grid.addWidget(sep, row, 0, 1, 2)
 
+        row += 1
+        results_grid.addWidget(QLabel("401k (10yr):"), row, 0)
         self.projection_401k_label = QLabel("$0")
         self.projection_401k_label.setStyleSheet("font-weight: bold; color: #006600;")
-        self.projection_401k_label.setToolTip("Projected 401k value in 10 years from additional contributions (7% avg return)")
-        results_layout.addRow("401k in 10 years:", self.projection_401k_label)
+        self.projection_401k_label.setToolTip("Projected 401k value in 10 years (7% return)")
+        results_grid.addWidget(self.projection_401k_label, row, 1)
 
+        row += 1
+        results_grid.addWidget(QLabel("401k (20yr):"), row, 0)
         self.projection_401k_20y_label = QLabel("$0")
         self.projection_401k_20y_label.setStyleSheet("font-weight: bold; color: #006600;")
-        self.projection_401k_20y_label.setToolTip("Projected 401k value in 20 years from additional contributions (7% avg return)")
-        results_layout.addRow("401k in 20 years:", self.projection_401k_20y_label)
+        self.projection_401k_20y_label.setToolTip("Projected 401k value in 20 years (7% return)")
+        results_grid.addWidget(self.projection_401k_20y_label, row, 1)
 
-        results_layout.addRow(QLabel(""))  # spacer
-
+        row += 1
+        results_grid.addWidget(QLabel("10Y Net Worth:"), row, 0)
         self.networth_change_label = QLabel("$0")
         self.networth_change_label.setStyleSheet("font-weight: bold; color: #9933cc;")
-        self.networth_change_label.setToolTip("Projected 10-year net worth increase from this strategy\n(Debt payoff + Interest saved + 401k growth)")
-        results_layout.addRow("10Y Net Worth Δ:", self.networth_change_label)
+        self.networth_change_label.setToolTip("Projected 10-year net worth increase")
+        results_grid.addWidget(self.networth_change_label, row, 1)
+
+        # Separator before silver price analysis
+        row += 1
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setFrameShadow(QFrame.Shadow.Sunken)
+        results_grid.addWidget(sep2, row, 0, 1, 2)
+
+        row += 1
+        results_grid.addWidget(QLabel("Silver Price:"), row, 0)
+        self.current_silver_label = QLabel("$0.00")
+        self.current_silver_label.setStyleSheet("font-weight: bold;")
+        self.current_silver_label.setToolTip("Current silver spot price")
+        results_grid.addWidget(self.current_silver_label, row, 1)
+
+        row += 1
+        results_grid.addWidget(QLabel("0% Tax Price:"), row, 0)
+        self.optimal_silver_label = QLabel("N/A")
+        self.optimal_silver_label.setStyleSheet("font-weight: bold; color: #C0C0C0;")
+        self.optimal_silver_label.setToolTip("Silver price where total gain equals 0% LTCG headroom (no tax)")
+        results_grid.addWidget(self.optimal_silver_label, row, 1)
+
+        row += 1
+        results_grid.addWidget(QLabel("Price Diff:"), row, 0)
+        self.silver_diff_label = QLabel("N/A")
+        self.silver_diff_label.setStyleSheet("font-weight: bold;")
+        self.silver_diff_label.setToolTip("Difference from current price to reach 0% tax threshold")
+        results_grid.addWidget(self.silver_diff_label, row, 1)
+
+        # Silver outlook section
+        row += 1
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.Shape.HLine)
+        sep3.setFrameShadow(QFrame.Shadow.Sunken)
+        results_grid.addWidget(sep3, row, 0, 1, 2)
+
+        row += 1
+        outlook_header = QLabel("Silver Outlook (Speculative)")
+        outlook_header.setStyleSheet("font-weight: bold; font-size: 10px; color: #888;")
+        outlook_header.setToolTip(
+            "DISCLAIMER: These are hypothetical scenarios, not financial advice.\n"
+            "Silver prices are unpredictable and influenced by many factors.\n"
+            "Use for planning purposes only."
+        )
+        results_grid.addWidget(outlook_header, row, 0, 1, 2)
+
+        # Silver price change slider
+        row += 1
+        results_grid.addWidget(QLabel("Price Change:"), row, 0)
+        self.silver_change_label = QLabel("0%")
+        self.silver_change_label.setStyleSheet("font-weight: bold; color: #0066cc;")
+        results_grid.addWidget(self.silver_change_label, row, 1)
+
+        row += 1
+        self.silver_outlook_slider = QSlider(Qt.Orientation.Horizontal)
+        self.silver_outlook_slider.setRange(-50, 100)  # -50% to +100%
+        self.silver_outlook_slider.setValue(0)
+        self.silver_outlook_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.silver_outlook_slider.setTickInterval(25)
+        self.silver_outlook_slider.valueChanged.connect(self._on_silver_outlook_changed)
+        results_grid.addWidget(self.silver_outlook_slider, row, 0, 1, 2)
+
+        # Slider range labels
+        row += 1
+        slider_range_widget = QWidget()
+        slider_range_layout = QHBoxLayout(slider_range_widget)
+        slider_range_layout.setContentsMargins(0, 0, 0, 0)
+        slider_range_layout.addWidget(QLabel("-50%"))
+        slider_range_layout.addStretch()
+        slider_range_layout.addWidget(QLabel("+100%"))
+        results_grid.addWidget(slider_range_widget, row, 0, 1, 2)
+
+        # Projected price and tax at selected change
+        row += 1
+        results_grid.addWidget(QLabel("Projected:"), row, 0)
+        self.silver_projected_label = QLabel("N/A")
+        self.silver_projected_label.setStyleSheet("font-weight: bold;")
+        self.silver_projected_label.setToolTip("Projected silver price at selected change %")
+        results_grid.addWidget(self.silver_projected_label, row, 1)
+
+        row += 1
+        results_grid.addWidget(QLabel("Tax at Price:"), row, 0)
+        self.silver_tax_at_price_label = QLabel("N/A")
+        self.silver_tax_at_price_label.setStyleSheet("font-weight: bold;")
+        self.silver_tax_at_price_label.setToolTip("Capital gains tax if silver reaches this price")
+        results_grid.addWidget(self.silver_tax_at_price_label, row, 1)
+
+        row += 1
+        results_grid.addWidget(QLabel("To Optimal:"), row, 0)
+        self.silver_growth_label = QLabel("N/A")
+        self.silver_growth_label.setStyleSheet("font-weight: bold; color: #C0C0C0;")
+        self.silver_growth_label.setToolTip("Price change needed to reach 0% tax threshold")
+        results_grid.addWidget(self.silver_growth_label, row, 1)
+
+        # Alternative strategy: Invest in 401k instead of debt payoff
+        row += 1
+        sep4 = QFrame()
+        sep4.setFrameShape(QFrame.Shape.HLine)
+        sep4.setFrameShadow(QFrame.Shadow.Sunken)
+        results_grid.addWidget(sep4, row, 0, 1, 2)
+
+        row += 1
+        alt_header = QLabel("Alternative: Invest Instead")
+        alt_header.setStyleSheet("font-weight: bold; font-size: 10px; color: #888;")
+        alt_header.setToolTip(
+            "Compare: What if you invested silver proceeds in 401k\n"
+            "instead of paying off debt?\n\n"
+            "This assumes you can make after-tax IRA contributions\n"
+            "or have 401k room beyond current contributions."
+        )
+        results_grid.addWidget(alt_header, row, 0, 1, 2)
+
+        row += 1
+        results_grid.addWidget(QLabel("Invest (10yr):"), row, 0)
+        self.invest_10y_label = QLabel("N/A")
+        self.invest_10y_label.setStyleSheet("font-weight: bold; color: #0066cc;")
+        self.invest_10y_label.setToolTip("Value if proceeds invested at 7% for 10 years")
+        results_grid.addWidget(self.invest_10y_label, row, 1)
+
+        row += 1
+        results_grid.addWidget(QLabel("Debt Interest:"), row, 0)
+        self.debt_interest_label = QLabel("N/A")
+        self.debt_interest_label.setStyleSheet("font-weight: bold; color: #cc0000;")
+        self.debt_interest_label.setToolTip("Total interest paid on debt over same period")
+        results_grid.addWidget(self.debt_interest_label, row, 1)
+
+        row += 1
+        results_grid.addWidget(QLabel("Net Difference:"), row, 0)
+        self.net_diff_label = QLabel("N/A")
+        self.net_diff_label.setStyleSheet("font-weight: bold;")
+        self.net_diff_label.setToolTip("Investment growth minus debt interest = net benefit")
+        results_grid.addWidget(self.net_diff_label, row, 1)
+
+        row += 1
+        results_grid.addWidget(QLabel("Recommendation:"), row, 0)
+        self.strategy_rec_label = QLabel("N/A")
+        self.strategy_rec_label.setStyleSheet("font-weight: bold; font-size: 9px;")
+        self.strategy_rec_label.setWordWrap(True)
+        results_grid.addWidget(self.strategy_rec_label, row, 1)
+
+        # Set column stretch
+        results_grid.setColumnStretch(1, 1)
 
         left_layout.addWidget(results_group)
-
         left_layout.addStretch()
-        splitter.addWidget(left_panel)
+
+        scroll_area.setWidget(scroll_content)
+        splitter.addWidget(scroll_area)
 
         # Right panel - Chart
         right_panel = QFrame()
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(10, 0, 0, 0)
+        right_layout.setContentsMargins(4, 0, 0, 0)
+        right_layout.setSpacing(4)
 
         chart_label = QLabel("Tax vs Debt Payoff Trade-off")
         chart_label.setStyleSheet("font-weight: bold; font-size: 12px;")
@@ -944,20 +1207,24 @@ class TaxSettingsPage(QWizardPage):
 
         # Create chart
         self._setup_chart()
-        right_layout.addWidget(self.chart_view)
+        right_layout.addWidget(self.chart_view, 1)
 
-        # Legend
+        # Legend - more compact
         legend_layout = QHBoxLayout()
-        tax_legend = QLabel("● Tax Owed")
-        tax_legend.setStyleSheet("color: #cc0000;")
-        months_legend = QLabel("● Months to Debt-Free")
-        months_legend.setStyleSheet("color: #0066cc;")
-        networth_legend = QLabel("● 10Y Net Worth")
-        networth_legend.setStyleSheet("color: #9933cc;")
-        marker_legend = QLabel("◆ Current Selection")
-        marker_legend.setStyleSheet("color: #00cc00;")
+        legend_layout.setSpacing(8)
+        tax_legend = QLabel("● Tax")
+        tax_legend.setStyleSheet("color: #cc0000; font-size: 10px;")
+        months_legend = QLabel("● Months")
+        months_legend.setStyleSheet("color: #0066cc; font-size: 10px;")
+        cashflow_legend = QLabel("● Cash Flow")
+        cashflow_legend.setStyleSheet("color: #cc6600; font-size: 10px;")
+        networth_legend = QLabel("● Net Worth")
+        networth_legend.setStyleSheet("color: #9933cc; font-size: 10px;")
+        marker_legend = QLabel("◆ Current")
+        marker_legend.setStyleSheet("color: #00cc00; font-size: 10px;")
         legend_layout.addWidget(tax_legend)
         legend_layout.addWidget(months_legend)
+        legend_layout.addWidget(cashflow_legend)
         legend_layout.addWidget(networth_legend)
         legend_layout.addWidget(marker_legend)
         legend_layout.addStretch()
@@ -965,8 +1232,10 @@ class TaxSettingsPage(QWizardPage):
 
         splitter.addWidget(right_panel)
 
-        # Set splitter sizes (40% controls, 60% chart)
-        splitter.setSizes([400, 600])
+        # Set splitter sizes and policies
+        splitter.setSizes([350, 550])
+        splitter.setStretchFactor(0, 0)  # Left panel doesn't stretch
+        splitter.setStretchFactor(1, 1)  # Right panel stretches
 
         layout.addWidget(splitter)
 
@@ -1014,11 +1283,26 @@ class TaxSettingsPage(QWizardPage):
         self.networth_marker_series.setMarkerSize(10)
         self.networth_marker_series.setColor(QColor("#9933cc"))
 
+        # Cash flow series (orange) - shows monthly cash flow reduction
+        self.cashflow_series = QLineSeries()
+        self.cashflow_series.setName("Monthly Cash Flow")
+        pen = QPen(QColor("#cc6600"))
+        pen.setWidth(2)
+        self.cashflow_series.setPen(pen)
+
+        # Cash flow marker (orange diamond)
+        self.cashflow_marker_series = QScatterSeries()
+        self.cashflow_marker_series.setName("Current Cash Flow")
+        self.cashflow_marker_series.setMarkerSize(10)
+        self.cashflow_marker_series.setColor(QColor("#cc6600"))
+
         self.chart.addSeries(self.tax_series)
         self.chart.addSeries(self.months_series)
         self.chart.addSeries(self.networth_series)
+        self.chart.addSeries(self.cashflow_series)
         self.chart.addSeries(self.marker_series)
         self.chart.addSeries(self.networth_marker_series)
+        self.chart.addSeries(self.cashflow_marker_series)
 
         # X axis (401k contribution)
         self.x_axis = QValueAxis()
@@ -1031,6 +1315,8 @@ class TaxSettingsPage(QWizardPage):
         self.marker_series.attachAxis(self.x_axis)
         self.networth_series.attachAxis(self.x_axis)
         self.networth_marker_series.attachAxis(self.x_axis)
+        self.cashflow_series.attachAxis(self.x_axis)
+        self.cashflow_marker_series.attachAxis(self.x_axis)
 
         # Y axis for tax (left, red)
         self.y_tax_axis = QValueAxis()
@@ -1040,6 +1326,15 @@ class TaxSettingsPage(QWizardPage):
         self.chart.addAxis(self.y_tax_axis, Qt.AlignmentFlag.AlignLeft)
         self.tax_series.attachAxis(self.y_tax_axis)
         self.marker_series.attachAxis(self.y_tax_axis)
+
+        # Y axis for cash flow (left, orange) - shows monthly cash reduction
+        self.y_cashflow_axis = QValueAxis()
+        self.y_cashflow_axis.setTitleText("$/mo")
+        self.y_cashflow_axis.setLabelsColor(QColor("#cc6600"))
+        self.y_cashflow_axis.setLabelFormat("$%.0f")
+        self.chart.addAxis(self.y_cashflow_axis, Qt.AlignmentFlag.AlignLeft)
+        self.cashflow_series.attachAxis(self.y_cashflow_axis)
+        self.cashflow_marker_series.attachAxis(self.y_cashflow_axis)
 
         # Y axis for months (right, blue)
         self.y_months_axis = QValueAxis()
@@ -1068,6 +1363,7 @@ class TaxSettingsPage(QWizardPage):
         self._selected_assets = asset_page.get_selections()
         self._liabilities = LiabilityOperations.get_all()
         self._update_chart()
+        self._update_display()  # Refresh silver analysis and other displays with loaded assets
 
     def _load_income(self):
         """Pre-populate income and expenses from database."""
@@ -1175,6 +1471,43 @@ class TaxSettingsPage(QWizardPage):
 
         return (True, mode, target, current, rate)
 
+    def _get_adjusted_asset_value(self, selection) -> float:
+        """Get the adjusted value for an asset considering silver price outlook.
+
+        If the asset is silver and the silver outlook slider is set, applies the
+        price multiplier to calculate a projected value.
+        """
+        symbol = getattr(selection.asset, 'symbol', '').lower()
+        is_silver = symbol == 'silver'
+
+        if is_silver and self._silver_price_multiplier != 1.0:
+            # Apply the price multiplier to silver assets
+            if selection.asset.asset_type == 'metal':
+                adjusted_price = selection.asset.current_price * self._silver_price_multiplier
+                price_per_unit = adjusted_price * selection.asset.weight_per_unit
+                return selection.quantity_to_sell * price_per_unit
+            return selection.quantity_to_sell * selection.asset.current_price * self._silver_price_multiplier
+
+        # Non-silver or no price adjustment
+        return selection.value_to_sell
+
+    def _get_adjusted_asset_gain(self, selection) -> float:
+        """Get the adjusted gain/loss for an asset considering silver price outlook.
+
+        If the asset is silver and the silver outlook slider is set, calculates gain
+        based on the projected price.
+        """
+        adjusted_value = self._get_adjusted_asset_value(selection)
+        return adjusted_value - selection.cost_basis_portion
+
+    def _get_total_adjusted_value(self) -> float:
+        """Get total value of all selected assets with silver price adjustment applied."""
+        return sum(self._get_adjusted_asset_value(s) for s in self._selected_assets)
+
+    def _get_total_adjusted_gain(self) -> float:
+        """Get total gain from all selected assets with silver price adjustment applied."""
+        return sum(self._get_adjusted_asset_gain(s) for s in self._selected_assets)
+
     def _update_slider_range(self):
         """Update slider range based on current 401k and age."""
         current = int(self.current_401k_input.value())
@@ -1200,8 +1533,51 @@ class TaxSettingsPage(QWizardPage):
         self._update_display()
         self._update_marker()
 
+    def _on_goal_slider_changed(self, value):
+        """Handle goal slider value changes."""
+        if value == 0:
+            self.goal_value_label.setText("No Goal Set")
+            self.goal_value_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #666;")
+            self.goal_status_label.setText("")
+        else:
+            # Format the goal display
+            years = value // 12
+            months = value % 12
+            if years > 0 and months > 0:
+                goal_text = f"{value} months ({years} yr {months} mo)"
+            elif years > 0:
+                goal_text = f"{value} months ({years} year{'s' if years > 1 else ''})"
+            else:
+                goal_text = f"{value} month{'s' if value > 1 else ''}"
+
+            self.goal_value_label.setText(goal_text)
+            self.goal_value_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #006600;")
+
+            # Compare goal to current projection
+            additional_401k = self.contribution_slider.value()
+            _, projected_months = self._calculate_tax_and_months(additional_401k)
+
+            if projected_months == 0:
+                self.goal_status_label.setText("No debt to pay off")
+                self.goal_status_label.setStyleSheet("font-size: 11px; color: #006600;")
+            elif projected_months <= value:
+                diff = value - projected_months
+                if diff == 0:
+                    self.goal_status_label.setText("Goal met exactly!")
+                else:
+                    self.goal_status_label.setText(f"On track! {diff} month{'s' if diff > 1 else ''} ahead of goal")
+                self.goal_status_label.setStyleSheet("font-size: 11px; color: #006600; font-weight: bold;")
+            else:
+                diff = projected_months - value
+                self.goal_status_label.setText(f"Behind goal by {diff} month{'s' if diff > 1 else ''}")
+                self.goal_status_label.setStyleSheet("font-size: 11px; color: #cc0000; font-weight: bold;")
+
     def _calculate_tax_and_months(self, additional_401k: float) -> Tuple[float, int]:
-        """Calculate tax owed and months to debt-free for given 401k contribution."""
+        """Calculate tax owed and months to debt-free for given 401k contribution.
+
+        Uses adjusted asset values based on the silver outlook slider to calculate
+        tax and debt payoff timeline at the hypothetical silver price.
+        """
         gross = self.gross_income_input.value()
         current_401k = self.current_401k_input.value()
         status = self.filing_status.currentData()
@@ -1210,8 +1586,8 @@ class TaxSettingsPage(QWizardPage):
         taxable_income = gross - current_401k - additional_401k
         headroom = max(0, threshold - taxable_income)
 
-        # Calculate total gain from selected assets
-        total_gain = sum(s.gain_loss for s in self._selected_assets)
+        # Calculate total gain from selected assets (using adjusted values for silver outlook)
+        total_gain = self._get_total_adjusted_gain()
 
         # Calculate tax
         if total_gain <= 0:
@@ -1221,8 +1597,8 @@ class TaxSettingsPage(QWizardPage):
         else:
             tax = (total_gain - headroom) * 0.15
 
-        # Calculate net proceeds
-        total_value = sum(s.value_to_sell for s in self._selected_assets)
+        # Calculate net proceeds (using adjusted values for silver outlook)
+        total_value = self._get_total_adjusted_value()
         net_proceeds = total_value - tax
 
         # Calculate emergency fund allocation
@@ -1305,6 +1681,8 @@ class TaxSettingsPage(QWizardPage):
 
         # Simulate remaining payoff month by month
         month = 0
+        freed_payments = 0  # Payments from paid-off debts available for avalanche
+
         while any(b > 0.01 for b in balances.values()) and month < 600:
             month += 1
 
@@ -1314,28 +1692,29 @@ class TaxSettingsPage(QWizardPage):
                     interest = balances[d['id']] * monthly_rates[d['id']]
                     balances[d['id']] += interest
 
-            # Calculate available cash for this month
-            # Start with total payments, reduced by 401k increase
-            available_cash = max(0, total_monthly_payments - monthly_401k_increase)
-
             # Make payments in avalanche order
+            # Each debt gets its minimum payment, plus any freed payments go to highest rate
+            extra_for_avalanche = freed_payments
+
             for d in debt_items:
-                if balances[d['id']] > 0 and available_cash > 0:
+                if balances[d['id']] > 0:
                     if d['is_efund']:
-                        # E-fund gets whatever extra cash is available after minimums
-                        pmt = min(available_cash, balances[d['id']])
+                        # E-fund gets whatever extra cash is available
+                        pmt = min(extra_for_avalanche, balances[d['id']])
+                        extra_for_avalanche -= pmt
                     else:
-                        # Real debts get their minimum payment first, then extra
+                        # Real debts get their minimum payment plus any avalanche extra
                         min_pmt = min(payments[d['id']], balances[d['id']])
-                        pmt = min(available_cash, balances[d['id']])
-                        pmt = max(pmt, min_pmt)  # At least minimum
+                        pmt = min_pmt + min(extra_for_avalanche, balances[d['id']] - min_pmt)
+                        extra_for_avalanche -= (pmt - min_pmt)
 
                     balances[d['id']] -= pmt
-                    available_cash -= pmt
 
                     # When a debt is paid off, its payment becomes available for others
                     if balances[d['id']] <= 0.01:
                         balances[d['id']] = 0
+                        if not d['is_efund']:
+                            freed_payments += payments[d['id']]
 
         return month
 
@@ -1408,6 +1787,7 @@ class TaxSettingsPage(QWizardPage):
         self.tax_series.clear()
         self.months_series.clear()
         self.networth_series.clear()
+        self.cashflow_series.clear()
 
         max_contrib = self.contribution_slider.maximum()
         if max_contrib <= 0:
@@ -1419,22 +1799,30 @@ class TaxSettingsPage(QWizardPage):
         max_months = 0
         max_networth = 0
         min_networth = float('inf')
+        max_cashflow = 0
 
         for contrib in range(0, max_contrib + 1, step):
             tax, months = self._calculate_tax_and_months(contrib)
             networth = self._calculate_net_worth_change(contrib)
+            # Cash flow reduction is monthly 401k contribution (scaled to hundreds for visibility)
+            monthly_reduction = contrib / 12
+            # Scale to make it visible on the tax axis (divide by 10 for reasonable range)
+            cashflow_scaled = monthly_reduction
 
             self.tax_series.append(contrib, tax)
             self.months_series.append(contrib, months)
             self.networth_series.append(contrib, networth)
+            self.cashflow_series.append(contrib, cashflow_scaled)
 
             max_tax = max(max_tax, tax)
             max_months = max(max_months, months)
             max_networth = max(max_networth, networth)
             min_networth = min(min_networth, networth)
+            max_cashflow = max(max_cashflow, cashflow_scaled)
 
         # Set axis ranges
         self.y_tax_axis.setRange(0, max(max_tax * 1.1, 100))
+        self.y_cashflow_axis.setRange(0, max(max_cashflow * 1.1, 100))
         self.y_months_axis.setRange(0, max(max_months * 1.1, 12))
 
         # Net worth axis - show reasonable range
@@ -1452,11 +1840,14 @@ class TaxSettingsPage(QWizardPage):
         """Update the current position marker on chart."""
         self.marker_series.clear()
         self.networth_marker_series.clear()
+        self.cashflow_marker_series.clear()
         current_contrib = self.contribution_slider.value()
         tax, _ = self._calculate_tax_and_months(current_contrib)
         networth = self._calculate_net_worth_change(current_contrib)
+        cashflow = current_contrib / 12  # Monthly reduction in cash flow
         self.marker_series.append(current_contrib, tax)
         self.networth_marker_series.append(current_contrib, networth)
+        self.cashflow_marker_series.append(current_contrib, cashflow)
 
     def _update_display(self):
         """Update the results display labels."""
@@ -1552,6 +1943,491 @@ class TaxSettingsPage(QWizardPage):
             self.networth_change_label.setText(f"${networth_value:,.0f}")
             self.networth_change_label.setStyleSheet("font-weight: bold; color: #999;")
 
+        # Update optimal silver price analysis
+        self._update_silver_price_analysis()
+
+    def _update_silver_price_analysis(self):
+        """Calculate and display optimal silver price for 0% tax."""
+        # Find silver assets in selections
+        silver_assets = []
+        non_silver_gain = 0
+        non_silver_basis = 0
+
+        for selection in self._selected_assets:
+            # Symbol field contains metal type: 'silver', 'gold', etc.
+            symbol = getattr(selection.asset, 'symbol', '').lower()
+            is_silver = symbol == 'silver'
+
+            if is_silver:
+                silver_assets.append(selection)
+            else:
+                non_silver_gain += selection.gain_loss
+                non_silver_basis += selection.cost_basis_portion
+
+        if not silver_assets:
+            # No silver selected
+            self.current_silver_label.setText("N/A")
+            self.current_silver_label.setStyleSheet("font-weight: bold; color: #999;")
+            self.optimal_silver_label.setText("No silver selected")
+            self.optimal_silver_label.setStyleSheet("font-weight: bold; color: #999;")
+            self.silver_diff_label.setText("N/A")
+            self.silver_diff_label.setStyleSheet("font-weight: bold; color: #999;")
+            return
+
+        # Get current silver spot price (from first silver asset)
+        current_silver_price = silver_assets[0].asset.current_price
+
+        # Calculate total silver weight and basis being sold
+        total_silver_weight = sum(s.quantity_to_sell * s.asset.weight_per_unit for s in silver_assets)
+        total_silver_basis = sum(s.cost_basis_portion for s in silver_assets)
+
+        # Get LTCG headroom
+        gross = self.gross_income_input.value()
+        current_401k = self.current_401k_input.value()
+        additional_401k = self.contribution_slider.value()
+        status = self.filing_status.currentData()
+        threshold = LTCG_THRESHOLDS.get(status, 47025)
+        taxable_income = gross - current_401k - additional_401k
+        headroom = max(0, threshold - taxable_income)
+
+        # Calculate optimal silver price for 0% tax
+        # Total gain = silver_value - silver_basis + non_silver_gain
+        # For 0% tax: total_gain <= headroom
+        # silver_value - silver_basis + non_silver_gain <= headroom
+        # silver_value <= headroom - non_silver_gain + silver_basis
+        # (silver_price * total_weight) <= headroom - non_silver_gain + silver_basis
+        # silver_price <= (headroom - non_silver_gain + silver_basis) / total_weight
+
+        available_gain_for_silver = headroom - non_silver_gain
+        if total_silver_weight > 0:
+            # Optimal price = (basis + available_gain) / weight
+            optimal_silver_price = (total_silver_basis + available_gain_for_silver) / total_silver_weight
+        else:
+            optimal_silver_price = 0
+
+        # Update display
+        self.current_silver_label.setText(f"${current_silver_price:.2f}/oz")
+        self.current_silver_label.setStyleSheet("font-weight: bold;")
+
+        if optimal_silver_price <= 0:
+            # Already over headroom from non-silver gains
+            self.optimal_silver_label.setText("Over limit")
+            self.optimal_silver_label.setStyleSheet("font-weight: bold; color: #cc0000;")
+            self.optimal_silver_label.setToolTip(
+                "Non-silver gains already exceed LTCG headroom.\n"
+                "Any silver sale will incur 15% tax."
+            )
+            self.silver_diff_label.setText("N/A")
+            self.silver_diff_label.setStyleSheet("font-weight: bold; color: #cc0000;")
+        else:
+            self.optimal_silver_label.setText(f"${optimal_silver_price:.2f}/oz")
+            self.optimal_silver_label.setStyleSheet("font-weight: bold; color: #C0C0C0;")
+            self.optimal_silver_label.setToolTip(
+                f"At ${optimal_silver_price:.2f}/oz, your total gain equals\n"
+                f"the ${headroom:,.0f} LTCG headroom (0% tax bracket)."
+            )
+
+            # Calculate and display difference
+            price_diff = optimal_silver_price - current_silver_price
+            pct_diff = (price_diff / current_silver_price * 100) if current_silver_price > 0 else 0
+
+            if abs(price_diff) < 0.01:
+                self.silver_diff_label.setText("At optimal")
+                self.silver_diff_label.setStyleSheet("font-weight: bold; color: #006600;")
+            elif price_diff > 0:
+                # Silver needs to rise to reach optimal
+                self.silver_diff_label.setText(f"+${price_diff:.2f} ({pct_diff:+.1f}%)")
+                self.silver_diff_label.setStyleSheet("font-weight: bold; color: #006600;")
+                self.silver_diff_label.setToolTip(
+                    f"Silver needs to rise ${price_diff:.2f}/oz to reach the 0% tax threshold.\n"
+                    f"Currently, you're ${abs(price_diff * total_silver_weight):,.0f} under the optimal value."
+                )
+            else:
+                # Silver is above optimal - will pay some tax
+                self.silver_diff_label.setText(f"${price_diff:.2f} ({pct_diff:+.1f}%)")
+                self.silver_diff_label.setStyleSheet("font-weight: bold; color: #cc6600;")
+                excess_gain = abs(price_diff) * total_silver_weight
+                tax_on_excess = excess_gain * 0.15
+                self.silver_diff_label.setToolTip(
+                    f"Silver is ${abs(price_diff):.2f}/oz above the 0% tax threshold.\n"
+                    f"Excess gain: ${excess_gain:,.0f} → Tax: ${tax_on_excess:,.0f} (15%)"
+                )
+
+        # Update silver outlook section
+        self._update_silver_outlook(current_silver_price, optimal_silver_price, total_silver_weight, total_silver_basis, headroom, non_silver_gain)
+
+        # Update invest vs debt comparison
+        self._update_invest_vs_debt_analysis()
+
+    def _update_silver_outlook(self, current_price: float, optimal_price: float,
+                                total_weight: float, total_basis: float,
+                                headroom: float, non_silver_gain: float):
+        """Update the speculative silver price outlook section.
+
+        Stores silver data for the slider and updates the display.
+
+        DISCLAIMER: These are hypothetical scenarios for planning purposes only.
+        Silver prices are influenced by many unpredictable factors including:
+        - Industrial demand (solar, electronics, EV)
+        - Investment demand (ETFs, coins/bars)
+        - Monetary policy and interest rates
+        - Inflation expectations
+        - Geopolitical events
+        - Mining supply and costs
+        - Currency movements (especially USD)
+        """
+        # Store silver data for slider use
+        self._silver_current_price = current_price
+        self._silver_optimal_price = optimal_price
+        self._silver_total_weight = total_weight
+        self._silver_total_basis = total_basis
+        self._silver_headroom = headroom
+        self._silver_non_silver_gain = non_silver_gain
+
+        if current_price <= 0 or total_weight <= 0:
+            # No silver data - reset all labels
+            self.silver_change_label.setText("N/A")
+            self.silver_change_label.setStyleSheet("font-weight: bold; color: #999;")
+            self.silver_projected_label.setText("N/A")
+            self.silver_projected_label.setStyleSheet("font-weight: bold; color: #999;")
+            self.silver_tax_at_price_label.setText("N/A")
+            self.silver_tax_at_price_label.setStyleSheet("font-weight: bold; color: #999;")
+            self.silver_growth_label.setText("N/A")
+            self.silver_growth_label.setStyleSheet("font-weight: bold; color: #999;")
+            return
+
+        # Update display based on current slider value
+        self._update_silver_outlook_from_slider()
+
+        # Update growth rate to reach optimal price
+        if optimal_price > 0 and optimal_price > current_price:
+            growth_needed = (optimal_price - current_price) / current_price
+            growth_pct = growth_needed * 100
+
+            if growth_pct <= 5:
+                color = "#006600"
+                qualifier = "easily achievable"
+            elif growth_pct <= 15:
+                color = "#006600"
+                qualifier = "reasonably achievable"
+            elif growth_pct <= 30:
+                color = "#cc6600"
+                qualifier = "optimistic but possible"
+            else:
+                color = "#cc0000"
+                qualifier = "would require significant rally"
+
+            self.silver_growth_label.setText(f"+{growth_pct:.1f}% needed")
+            self.silver_growth_label.setStyleSheet(f"font-weight: bold; color: {color};")
+            self.silver_growth_label.setToolTip(
+                f"Silver needs to rise {growth_pct:.1f}% to reach ${optimal_price:.2f}/oz\n"
+                f"(the price at which you pay 0% tax)\n\n"
+                f"This is {qualifier} based on historical silver volatility\n"
+                f"(silver moves 15-40% annually on average).\n\n"
+                f"DISCLAIMER: Past performance does not predict future results."
+            )
+        elif optimal_price > 0 and optimal_price <= current_price:
+            self.silver_growth_label.setText("Already optimal")
+            self.silver_growth_label.setStyleSheet("font-weight: bold; color: #006600;")
+            self.silver_growth_label.setToolTip(
+                "Current silver price is at or above the optimal 0% tax price.\n"
+                "You could sell now and stay within the 0% LTCG bracket\n"
+                "(though you'd pay tax on the excess gain)."
+            )
+        else:
+            self.silver_growth_label.setText("N/A")
+            self.silver_growth_label.setStyleSheet("font-weight: bold; color: #999;")
+            self.silver_growth_label.setToolTip(
+                "Cannot calculate - non-silver gains already exceed LTCG headroom."
+            )
+
+    def _on_silver_outlook_changed(self, value: int):
+        """Handle silver outlook slider value changes.
+
+        Updates the silver price multiplier and triggers full recalculation of
+        all dependent fields (tax, months to debt-free, net worth, chart, etc.).
+        """
+        # Update the silver price multiplier
+        self._silver_price_multiplier = 1.0 + (value / 100.0)
+
+        # Update the silver outlook labels
+        self._update_silver_outlook_from_slider()
+
+        # Trigger full recalculation with the new silver price
+        self._update_chart()
+        self._update_display()
+        self._update_marker()
+
+    def _update_silver_outlook_from_slider(self):
+        """Update silver outlook display based on current slider value."""
+        # Check if we have silver data
+        if not hasattr(self, '_silver_current_price') or self._silver_current_price <= 0:
+            return
+
+        change_pct = self.silver_outlook_slider.value()
+        current_price = self._silver_current_price
+        total_weight = self._silver_total_weight
+        total_basis = self._silver_total_basis
+        headroom = self._silver_headroom
+        non_silver_gain = self._silver_non_silver_gain
+
+        # Update change label with color coding
+        if change_pct < 0:
+            self.silver_change_label.setText(f"{change_pct}%")
+            self.silver_change_label.setStyleSheet("font-weight: bold; color: #cc6600;")
+        elif change_pct > 0:
+            self.silver_change_label.setText(f"+{change_pct}%")
+            self.silver_change_label.setStyleSheet("font-weight: bold; color: #006600;")
+        else:
+            self.silver_change_label.setText("0%")
+            self.silver_change_label.setStyleSheet("font-weight: bold; color: #0066cc;")
+
+        # Calculate projected price
+        projected_price = current_price * (1 + change_pct / 100)
+        self.silver_projected_label.setText(f"${projected_price:.2f}/oz")
+        self.silver_projected_label.setToolTip(
+            f"Silver price at {change_pct:+}% from current ${current_price:.2f}/oz"
+        )
+
+        # Calculate tax at projected price
+        silver_value = projected_price * total_weight
+        silver_gain = silver_value - total_basis
+        total_gain = silver_gain + non_silver_gain
+
+        if total_gain <= 0 or total_gain <= headroom:
+            tax = 0
+        else:
+            tax = (total_gain - headroom) * 0.15
+
+        # Update tax label with color coding
+        if tax == 0:
+            self.silver_tax_at_price_label.setText(f"$0 (0%)")
+            self.silver_tax_at_price_label.setStyleSheet("font-weight: bold; color: #006600;")
+            self.silver_tax_at_price_label.setToolTip(
+                f"At ${projected_price:.2f}/oz:\n"
+                f"Silver value: ${silver_value:,.0f}\n"
+                f"Silver gain: ${silver_gain:,.0f}\n"
+                f"Total gain: ${total_gain:,.0f}\n"
+                f"Headroom: ${headroom:,.0f}\n\n"
+                f"Gain is within 0% LTCG bracket - no tax!"
+            )
+        else:
+            excess = total_gain - headroom
+            self.silver_tax_at_price_label.setText(f"${tax:,.0f}")
+            self.silver_tax_at_price_label.setStyleSheet("font-weight: bold; color: #cc0000;")
+            self.silver_tax_at_price_label.setToolTip(
+                f"At ${projected_price:.2f}/oz:\n"
+                f"Silver value: ${silver_value:,.0f}\n"
+                f"Silver gain: ${silver_gain:,.0f}\n"
+                f"Total gain: ${total_gain:,.0f}\n"
+                f"Headroom: ${headroom:,.0f}\n"
+                f"Excess gain: ${excess:,.0f}\n\n"
+                f"Tax (15% LTCG): ${tax:,.0f}"
+            )
+
+    def _update_invest_vs_debt_analysis(self):
+        """Calculate and display comparison of investing proceeds vs paying off debt.
+
+        Compares two strategies:
+        1. Sell silver, invest proceeds in 401k/IRA at historical returns
+        2. Sell silver, pay off debt immediately
+
+        Shows 10-year projection of net benefit/cost of each approach.
+        """
+        # Calculate net proceeds from silver sale
+        if not self._selected_assets:
+            self._reset_invest_labels("No assets")
+            return
+
+        total_value = sum(s.value_to_sell for s in self._selected_assets)
+        total_gain = sum(s.gain_loss for s in self._selected_assets)
+
+        # Get current tax settings
+        gross = self.gross_income_input.value()
+        current_401k = self.current_401k_input.value()
+        additional_401k = self.contribution_slider.value()
+        status = self.filing_status.currentData()
+        threshold = LTCG_THRESHOLDS.get(status, 47025)
+        taxable_income = gross - current_401k - additional_401k
+        headroom = max(0, threshold - taxable_income)
+
+        # Calculate tax on sale
+        if total_gain <= 0:
+            tax = 0
+        elif total_gain <= headroom:
+            tax = 0
+        else:
+            tax = (total_gain - headroom) * 0.15
+
+        net_proceeds = total_value - tax
+
+        if net_proceeds <= 0:
+            self._reset_invest_labels("No proceeds")
+            return
+
+        # Check if we have debt to compare against
+        if not self._liabilities:
+            self._reset_invest_labels("No debt")
+            return
+
+        # Calculate 10-year investment growth (7% moderate return, lump sum)
+        investment_return = HISTORICAL_RETURNS['moderate']  # 7%
+        years = 10
+        investment_value = net_proceeds * ((1 + investment_return) ** years)
+        investment_growth = investment_value - net_proceeds
+
+        # Calculate debt interest over 10 years if debt is kept
+        # Simulate continuing to pay minimum payments without the lump sum payoff
+        total_debt_interest = self._calculate_debt_interest_over_period(years * 12)
+
+        # Also calculate what happens if we pay off debt with proceeds
+        # (interest saved vs keeping the debt)
+        interest_saved_if_payoff = self._calculate_interest_saved_with_payoff(net_proceeds)
+
+        # Net difference: investment growth minus interest that would accrue
+        # If positive, investing is better; if negative, paying debt is better
+        net_difference = investment_growth - interest_saved_if_payoff
+
+        # Update UI labels
+        self.invest_10y_label.setText(f"${investment_value:,.0f}")
+        self.invest_10y_label.setToolTip(
+            f"If you invest ${net_proceeds:,.0f} at 7% annual return:\n"
+            f"After 10 years: ${investment_value:,.0f}\n"
+            f"Growth: ${investment_growth:,.0f}"
+        )
+
+        self.debt_interest_label.setText(f"${interest_saved_if_payoff:,.0f}")
+        self.debt_interest_label.setToolTip(
+            f"Interest you would save by paying off debt now:\n"
+            f"${interest_saved_if_payoff:,.0f} over the life of the debt\n\n"
+            f"(This is interest avoided, not total debt interest)"
+        )
+
+        if net_difference >= 0:
+            self.net_diff_label.setText(f"+${net_difference:,.0f}")
+            self.net_diff_label.setStyleSheet("font-weight: bold; color: #006600;")
+            self.net_diff_label.setToolTip(
+                f"Investment growth exceeds debt interest by ${net_difference:,.0f}\n"
+                f"Over 10 years, investing MAY be more profitable."
+            )
+            self.strategy_rec_label.setText("Consider investing")
+            self.strategy_rec_label.setStyleSheet("font-weight: bold; font-size: 9px; color: #006600;")
+            self.strategy_rec_label.setToolTip(
+                "Based on historical 7% returns vs your debt interest rates,\n"
+                "investing the proceeds may yield higher returns.\n\n"
+                "HOWEVER: Paying off debt provides guaranteed 'return'\n"
+                "equal to your interest rate, while investment returns\n"
+                "are not guaranteed. Consider your risk tolerance."
+            )
+        else:
+            self.net_diff_label.setText(f"-${abs(net_difference):,.0f}")
+            self.net_diff_label.setStyleSheet("font-weight: bold; color: #cc0000;")
+            self.net_diff_label.setToolTip(
+                f"Debt interest exceeds investment growth by ${abs(net_difference):,.0f}\n"
+                f"Paying off debt is likely the better financial choice."
+            )
+            self.strategy_rec_label.setText("Pay off debt")
+            self.strategy_rec_label.setStyleSheet("font-weight: bold; font-size: 9px; color: #0066cc;")
+            self.strategy_rec_label.setToolTip(
+                "Your debt interest rates are high enough that paying off\n"
+                "debt provides a better guaranteed 'return' than the\n"
+                "expected 7% market return.\n\n"
+                "Debt payoff is the mathematically optimal choice."
+            )
+
+    def _reset_invest_labels(self, reason: str):
+        """Reset investment vs debt labels to N/A state."""
+        style = "font-weight: bold; color: #999;"
+        self.invest_10y_label.setText("N/A")
+        self.invest_10y_label.setStyleSheet(style)
+        self.invest_10y_label.setToolTip(reason)
+        self.debt_interest_label.setText("N/A")
+        self.debt_interest_label.setStyleSheet(style)
+        self.debt_interest_label.setToolTip(reason)
+        self.net_diff_label.setText("N/A")
+        self.net_diff_label.setStyleSheet(style)
+        self.net_diff_label.setToolTip(reason)
+        self.strategy_rec_label.setText("N/A")
+        self.strategy_rec_label.setStyleSheet("font-weight: bold; font-size: 9px; color: #999;")
+        self.strategy_rec_label.setToolTip(reason)
+
+    def _calculate_debt_interest_over_period(self, months: int) -> float:
+        """Calculate total interest paid on all debts over a given period."""
+        if not self._liabilities:
+            return 0
+
+        total_interest = 0
+        balances = {l.id: l.current_balance for l in self._liabilities}
+
+        for month in range(months):
+            for l in self._liabilities:
+                if balances[l.id] > 0:
+                    interest = balances[l.id] * l.monthly_interest_rate
+                    total_interest += interest
+                    balances[l.id] += interest
+                    # Apply minimum payment
+                    pmt = min(l.monthly_payment, balances[l.id])
+                    balances[l.id] -= pmt
+
+        return total_interest
+
+    def _calculate_interest_saved_with_payoff(self, lump_sum: float) -> float:
+        """Calculate interest saved by applying lump sum to debt (avalanche method).
+
+        Compares:
+        - Interest paid if debts are paid normally with minimum payments
+        - Interest paid if lump sum is applied to highest-rate debt first
+
+        Returns the difference (interest saved).
+        """
+        if not self._liabilities or lump_sum <= 0:
+            return 0
+
+        # First, calculate total interest WITHOUT lump sum (baseline)
+        baseline_interest = 0
+        balances_baseline = {l.id: l.current_balance for l in self._liabilities}
+
+        month = 0
+        max_months = 600  # 50 year cap
+        while any(b > 0.01 for b in balances_baseline.values()) and month < max_months:
+            month += 1
+            for l in self._liabilities:
+                if balances_baseline[l.id] > 0:
+                    interest = balances_baseline[l.id] * l.monthly_interest_rate
+                    baseline_interest += interest
+                    balances_baseline[l.id] += interest
+                    pmt = min(l.monthly_payment, balances_baseline[l.id])
+                    balances_baseline[l.id] -= pmt
+
+        # Now calculate interest WITH lump sum applied (avalanche: highest rate first)
+        payoff_interest = 0
+        balances_payoff = {l.id: l.current_balance for l in self._liabilities}
+        remaining_lump = lump_sum
+
+        # Apply lump sum to debts in order of interest rate (highest first)
+        sorted_liabilities = sorted(self._liabilities, key=lambda x: x.interest_rate, reverse=True)
+        for l in sorted_liabilities:
+            if remaining_lump <= 0:
+                break
+            payoff_amount = min(remaining_lump, balances_payoff[l.id])
+            balances_payoff[l.id] -= payoff_amount
+            remaining_lump -= payoff_amount
+
+        # Simulate remaining payoff
+        month = 0
+        while any(b > 0.01 for b in balances_payoff.values()) and month < max_months:
+            month += 1
+            for l in self._liabilities:
+                if balances_payoff[l.id] > 0:
+                    interest = balances_payoff[l.id] * l.monthly_interest_rate
+                    payoff_interest += interest
+                    balances_payoff[l.id] += interest
+                    pmt = min(l.monthly_payment, balances_payoff[l.id])
+                    balances_payoff[l.id] -= pmt
+
+        # Interest saved = baseline - with_payoff
+        return max(0, baseline_interest - payoff_interest)
+
     def _set_optimal(self):
         """Set slider to optimal value for 0% LTCG."""
         gross = self.gross_income_input.value()
@@ -1587,6 +2463,53 @@ class TaxSettingsPage(QWizardPage):
 
         adjusted_income = gross_income - current_401k - additional_401k
         return (adjusted_income, self.filing_status.currentData(), float(additional_401k), efund_allocation, efund_settings)
+
+    def get_settings_data(self) -> Dict[str, Any]:
+        """Get all tax settings as a dict for saving."""
+        return {
+            'gross_income': self.gross_income_input.value(),
+            'current_401k': self.current_401k_input.value(),
+            'filing_status': self.filing_status.currentData(),
+            'catchup_enabled': self.catchup_checkbox.isChecked(),
+            'additional_401k': self.contribution_slider.value(),
+            'efund_enabled': self.efund_checkbox.isChecked(),
+            'efund_target': self.efund_target_input.value(),
+            'efund_current': self.efund_current_input.value(),
+            'efund_mode': self.efund_mode_combo.currentData(),
+            'efund_rate': self.efund_rate_input.value(),
+            'goal_months': self.goal_slider.value(),
+        }
+
+    def restore_settings(self, data: Dict[str, Any]):
+        """Restore tax settings from saved data."""
+        if 'gross_income' in data:
+            self.gross_income_input.setValue(data['gross_income'])
+        if 'current_401k' in data:
+            self.current_401k_input.setValue(data['current_401k'])
+        if 'filing_status' in data:
+            idx = self.filing_status.findData(data['filing_status'])
+            if idx >= 0:
+                self.filing_status.setCurrentIndex(idx)
+        if 'catchup_enabled' in data:
+            self.catchup_checkbox.setChecked(data['catchup_enabled'])
+        if 'additional_401k' in data:
+            self.contribution_slider.setValue(int(data['additional_401k']))
+            self.slider_value_label.setText(f"${int(data['additional_401k']):,}")
+        if 'efund_enabled' in data:
+            self.efund_checkbox.setChecked(data['efund_enabled'])
+            self._on_efund_changed(Qt.CheckState.Checked.value if data['efund_enabled'] else Qt.CheckState.Unchecked.value)
+        if 'efund_target' in data:
+            self.efund_target_input.setValue(data['efund_target'])
+        if 'efund_current' in data:
+            self.efund_current_input.setValue(data['efund_current'])
+        if 'efund_mode' in data:
+            idx = self.efund_mode_combo.findData(data['efund_mode'])
+            if idx >= 0:
+                self.efund_mode_combo.setCurrentIndex(idx)
+        if 'efund_rate' in data:
+            self.efund_rate_input.setValue(data['efund_rate'])
+        if 'goal_months' in data:
+            self.goal_slider.setValue(data['goal_months'])
 
 
 class ResultsPage(QWizardPage):
@@ -1917,7 +2840,9 @@ class DebtPayoffSimulationWizard(QWizard):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Debt Payoff Simulation")
-        self.setMinimumSize(800, 600)
+        self.setMinimumSize(900, 650)
+        self.resize(1000, 700)  # Default size larger than minimum
+        self.setSizeGripEnabled(True)  # Allow resizing from corner
 
         # Add pages
         self.addPage(AssetSelectionPage())
@@ -1926,3 +2851,91 @@ class DebtPayoffSimulationWizard(QWizard):
 
         # Configure buttons
         self.setButtonText(QWizard.WizardButton.FinishButton, "Close")
+
+        # Add custom Save/Load buttons
+        self.setOption(QWizard.WizardOption.HaveCustomButton1, True)
+        self.setOption(QWizard.WizardOption.HaveCustomButton2, True)
+        self.setButtonText(QWizard.WizardButton.CustomButton1, "Save Settings")
+        self.setButtonText(QWizard.WizardButton.CustomButton2, "Load Settings")
+        self.customButtonClicked.connect(self._on_custom_button)
+
+        # Try to load saved settings on startup
+        self._load_saved_settings()
+
+    def _on_custom_button(self, button_id):
+        """Handle custom button clicks."""
+        if button_id == QWizard.WizardButton.CustomButton1.value:
+            self._save_settings()
+        elif button_id == QWizard.WizardButton.CustomButton2.value:
+            self._load_settings_with_confirm()
+
+    def _save_settings(self):
+        """Save current wizard state to database."""
+        asset_page = self.page(0)
+        tax_page = self.page(1)
+
+        data = {
+            'asset_selections': asset_page.get_selection_data(),
+            'tax_settings': tax_page.get_settings_data(),
+        }
+
+        try:
+            json_data = json.dumps(data)
+            SettingsOperations.set(SIMULATION_SETTINGS_KEY, json_data)
+            QMessageBox.information(
+                self, "Settings Saved",
+                "Your simulation settings have been saved.\n"
+                "They will be automatically loaded next time you open this wizard."
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Save Error",
+                f"Failed to save settings: {str(e)}"
+            )
+
+    def _load_settings_with_confirm(self):
+        """Load saved settings with user confirmation."""
+        saved = SettingsOperations.get(SIMULATION_SETTINGS_KEY, "")
+        if not saved:
+            QMessageBox.information(
+                self, "No Saved Settings",
+                "No previously saved simulation settings were found."
+            )
+            return
+
+        reply = QMessageBox.question(
+            self, "Load Settings",
+            "Load previously saved settings?\n"
+            "This will replace your current selections.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self._load_saved_settings()
+            QMessageBox.information(
+                self, "Settings Loaded",
+                "Your saved simulation settings have been restored."
+            )
+
+    def _load_saved_settings(self):
+        """Load saved settings from database."""
+        saved = SettingsOperations.get(SIMULATION_SETTINGS_KEY, "")
+        if not saved:
+            return
+
+        try:
+            data = json.loads(saved)
+
+            # Restore asset selections
+            if 'asset_selections' in data:
+                asset_page = self.page(0)
+                asset_page.restore_selections(data['asset_selections'])
+
+            # Restore tax settings
+            if 'tax_settings' in data:
+                tax_page = self.page(1)
+                tax_page.restore_settings(data['tax_settings'])
+
+        except (json.JSONDecodeError, Exception) as e:
+            # Silently ignore load errors on startup
+            pass
