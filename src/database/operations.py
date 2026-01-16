@@ -224,6 +224,8 @@ class AssetOperations:
         total_gain_loss = total_value - total_cost
 
         by_type = {}
+        metal_ounces = {}  # Track total ounces by metal type (gold, silver, etc.)
+
         for asset in assets:
             if asset.asset_type not in by_type:
                 by_type[asset.asset_type] = {
@@ -235,13 +237,21 @@ class AssetOperations:
             by_type[asset.asset_type]['total_cost'] += asset.total_cost
             by_type[asset.asset_type]['current_value'] += asset.current_value
 
+            # Track metal ounces by symbol (GOLD, SILVER, etc.)
+            if asset.asset_type == 'metal' and asset.symbol:
+                metal_key = asset.symbol.upper()
+                if metal_key not in metal_ounces:
+                    metal_ounces[metal_key] = 0.0
+                metal_ounces[metal_key] += asset.total_weight
+
         return {
             'total_assets': len(assets),
             'total_cost': total_cost,
             'total_value': total_value,
             'total_gain_loss': total_gain_loss,
             'gain_loss_percent': (total_gain_loss / total_cost * 100) if total_cost > 0 else 0,
-            'by_type': by_type
+            'by_type': by_type,
+            'metal_ounces': metal_ounces
         }
 
 

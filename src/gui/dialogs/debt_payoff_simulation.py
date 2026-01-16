@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QBrush
-from PyQt6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries
+from PyQt6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries, QAreaSeries
 from ...database.operations import AssetOperations, LiabilityOperations, IncomeOperations, SettingsOperations
 import json
 
@@ -1200,17 +1200,32 @@ class TaxSettingsPage(QWizardPage):
         right_layout.setContentsMargins(4, 0, 0, 0)
         right_layout.setSpacing(4)
 
-        chart_label = QLabel("Tax vs Debt Payoff Trade-off")
-        chart_label.setStyleSheet("font-weight: bold; font-size: 12px;")
-        chart_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        right_layout.addWidget(chart_label)
+        # Chart type selector and title
+        chart_header = QHBoxLayout()
+        chart_header.setSpacing(8)
+
+        self.chart_type_combo = QComboBox()
+        self.chart_type_combo.addItem("Tax Trade-off", "tradeoff")
+        self.chart_type_combo.addItem("Debt Waterfall", "waterfall")
+        self.chart_type_combo.setToolTip("Switch between chart views")
+        self.chart_type_combo.currentIndexChanged.connect(self._on_chart_type_changed)
+        chart_header.addWidget(self.chart_type_combo)
+
+        self.chart_label = QLabel("Tax vs Debt Payoff Trade-off")
+        self.chart_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        self.chart_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        chart_header.addWidget(self.chart_label, 1)
+
+        right_layout.addLayout(chart_header)
 
         # Create chart
         self._setup_chart()
         right_layout.addWidget(self.chart_view, 1)
 
-        # Legend - more compact
-        legend_layout = QHBoxLayout()
+        # Trade-off legend
+        self.tradeoff_legend = QWidget()
+        legend_layout = QHBoxLayout(self.tradeoff_legend)
+        legend_layout.setContentsMargins(0, 0, 0, 0)
         legend_layout.setSpacing(8)
         tax_legend = QLabel("● Tax")
         tax_legend.setStyleSheet("color: #cc0000; font-size: 10px;")
@@ -1228,7 +1243,19 @@ class TaxSettingsPage(QWizardPage):
         legend_layout.addWidget(networth_legend)
         legend_layout.addWidget(marker_legend)
         legend_layout.addStretch()
-        right_layout.addLayout(legend_layout)
+        right_layout.addWidget(self.tradeoff_legend)
+
+        # Waterfall legend (hidden by default)
+        self.waterfall_legend = QWidget()
+        self.waterfall_legend.setVisible(False)
+        waterfall_legend_layout = QHBoxLayout(self.waterfall_legend)
+        waterfall_legend_layout.setContentsMargins(0, 0, 0, 0)
+        waterfall_legend_layout.setSpacing(8)
+        self.waterfall_legend_label = QLabel("Debt balances over time (stacked)")
+        self.waterfall_legend_label.setStyleSheet("color: #666; font-size: 10px;")
+        waterfall_legend_layout.addWidget(self.waterfall_legend_label)
+        waterfall_legend_layout.addStretch()
+        right_layout.addWidget(self.waterfall_legend)
 
         splitter.addWidget(right_panel)
 
@@ -1848,6 +1875,294 @@ class TaxSettingsPage(QWizardPage):
         self.marker_series.append(current_contrib, tax)
         self.networth_marker_series.append(current_contrib, networth)
         self.cashflow_marker_series.append(current_contrib, cashflow)
+
+    def _on_chart_type_changed(self, index):
+        """Handle chart type selection change."""
+        chart_type = self.chart_type_combo.currentData()
+        if chart_type == "tradeoff":
+            self.chart_label.setText("Tax vs Debt Payoff Trade-off")
+            self.tradeoff_legend.setVisible(True)
+            self.waterfall_legend.setVisible(False)
+            self._show_tradeoff_chart()
+        else:
+            self.chart_label.setText("Debt Payoff Timeline")
+            self.tradeoff_legend.setVisible(False)
+            self.waterfall_legend.setVisible(True)
+            self._show_waterfall_chart()
+
+    def _show_tradeoff_chart(self):
+        """Show the trade-off chart series and axes."""
+        # Show trade-off series
+        self.tax_series.setVisible(True)
+        self.months_series.setVisible(True)
+        self.networth_series.setVisible(True)
+        self.cashflow_series.setVisible(True)
+        self.marker_series.setVisible(True)
+        self.networth_marker_series.setVisible(True)
+        self.cashflow_marker_series.setVisible(True)
+
+        # Show trade-off axes
+        self.x_axis.setVisible(True)
+        self.x_axis.setTitleText("Additional 401k ($)")
+        self.y_tax_axis.setVisible(True)
+        self.y_months_axis.setVisible(True)
+        self.y_networth_axis.setVisible(True)
+        self.y_cashflow_axis.setVisible(True)
+
+        # Hide waterfall series
+        for series in getattr(self, '_waterfall_series', []):
+            series.setVisible(False)
+        if hasattr(self, '_waterfall_x_axis'):
+            self._waterfall_x_axis.setVisible(False)
+        if hasattr(self, '_waterfall_y_axis'):
+            self._waterfall_y_axis.setVisible(False)
+
+        self._update_chart()
+
+    def _show_waterfall_chart(self):
+        """Show the debt waterfall chart."""
+        # Hide trade-off series
+        self.tax_series.setVisible(False)
+        self.months_series.setVisible(False)
+        self.networth_series.setVisible(False)
+        self.cashflow_series.setVisible(False)
+        self.marker_series.setVisible(False)
+        self.networth_marker_series.setVisible(False)
+        self.cashflow_marker_series.setVisible(False)
+
+        # Hide trade-off axes
+        self.x_axis.setVisible(False)
+        self.y_tax_axis.setVisible(False)
+        self.y_months_axis.setVisible(False)
+        self.y_networth_axis.setVisible(False)
+        self.y_cashflow_axis.setVisible(False)
+
+        self._update_waterfall_chart()
+
+    def _simulate_waterfall_timeline(self) -> Dict[str, Any]:
+        """Simulate the complete debt payoff timeline, returning balance history for each debt.
+
+        Returns:
+            Dict with:
+                - 'months': list of month numbers
+                - 'debts': list of dicts with 'name', 'color', 'balances' (list parallel to months)
+                - 'total_months': total months to payoff
+        """
+        # Check if we have required data
+        if not hasattr(self, '_selected_assets') or not self._selected_assets:
+            return {'months': [], 'debts': [], 'total_months': 0}
+        if not hasattr(self, '_liabilities') or not self._liabilities:
+            return {'months': [], 'debts': [], 'total_months': 0}
+
+        additional_401k = self.contribution_slider.value()
+        tax, _ = self._calculate_tax_and_months(additional_401k)
+
+        # Total value from selling assets
+        total_value = sum(s.value_to_sell for s in self._selected_assets)
+        net_proceeds = total_value - tax
+
+        # Get e-fund settings
+        efund_enabled, efund_mode, efund_target, efund_current, efund_rate = self._get_efund_settings()
+        efund_needed = max(0, efund_target - efund_current) if efund_enabled else 0
+        efund_allocation = self._get_efund_allocation() if efund_mode == "lump_sum" else 0
+
+        # Build list of debts
+        debt_items = []
+        colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#34495e']
+
+        for i, l in enumerate(self._liabilities):
+            if l.current_balance > 0:
+                debt_items.append({
+                    'id': l.id,
+                    'name': l.name,
+                    'balance': l.current_balance,
+                    'payment': l.monthly_payment,
+                    'rate': l.interest_rate,
+                    'monthly_rate': l.monthly_interest_rate,
+                    'is_efund': False,
+                    'color': colors[i % len(colors)]
+                })
+
+        # Add e-fund as virtual debt if in avalanche mode
+        if efund_enabled and efund_mode == "avalanche" and efund_needed > 0:
+            debt_items.append({
+                'id': 'efund',
+                'name': 'Emergency Fund',
+                'balance': efund_needed,
+                'payment': 0,
+                'rate': efund_rate,
+                'monthly_rate': 0,
+                'is_efund': True,
+                'color': '#006699'
+            })
+
+        if not debt_items:
+            return {'months': [], 'debts': [], 'total_months': 0}
+
+        # Sort by interest rate (avalanche order)
+        debt_items.sort(key=lambda x: x['rate'], reverse=True)
+
+        # Initialize tracking
+        balances = {d['id']: d['balance'] for d in debt_items}
+        payments = {d['id']: d['payment'] for d in debt_items}
+        monthly_rates = {d['id']: d['monthly_rate'] for d in debt_items}
+
+        # History tracking - each debt gets a list of balances per month
+        history = {d['id']: [d['balance']] for d in debt_items}
+        months_list = [0]
+
+        # Apply initial proceeds
+        remaining = net_proceeds - efund_allocation
+        for d in debt_items:
+            if remaining <= 0:
+                break
+            if balances[d['id']] > 0:
+                pay = min(remaining, balances[d['id']])
+                balances[d['id']] -= pay
+                remaining -= pay
+
+        # Record post-lump-sum state
+        for d in debt_items:
+            history[d['id']].append(balances[d['id']])
+        months_list.append(0.5)  # Half-step to show lump sum payment
+
+        # Simulate month by month
+        month = 0
+        freed_payments = 0
+
+        while any(b > 0.01 for b in balances.values()) and month < 600:
+            month += 1
+
+            # Accrue interest
+            for d in debt_items:
+                if balances[d['id']] > 0 and not d['is_efund']:
+                    interest = balances[d['id']] * monthly_rates[d['id']]
+                    balances[d['id']] += interest
+
+            # Make payments in avalanche order
+            extra_for_avalanche = freed_payments
+
+            for d in debt_items:
+                if balances[d['id']] > 0:
+                    if d['is_efund']:
+                        pmt = min(extra_for_avalanche, balances[d['id']])
+                        extra_for_avalanche -= pmt
+                    else:
+                        min_pmt = min(payments[d['id']], balances[d['id']])
+                        pmt = min_pmt + min(extra_for_avalanche, balances[d['id']] - min_pmt)
+                        extra_for_avalanche -= (pmt - min_pmt)
+
+                    balances[d['id']] -= pmt
+
+                    if balances[d['id']] <= 0.01:
+                        balances[d['id']] = 0
+                        if not d['is_efund']:
+                            freed_payments += payments[d['id']]
+
+            # Record state
+            for d in debt_items:
+                history[d['id']].append(balances[d['id']])
+            months_list.append(month)
+
+        return {
+            'months': months_list,
+            'debts': [
+                {
+                    'id': d['id'],
+                    'name': d['name'],
+                    'color': d['color'],
+                    'balances': history[d['id']],
+                    'is_efund': d['is_efund']
+                }
+                for d in debt_items
+            ],
+            'total_months': month
+        }
+
+    def _update_waterfall_chart(self):
+        """Update the waterfall chart with debt timeline data."""
+        # Clear any existing waterfall series
+        for series in getattr(self, '_waterfall_series', []):
+            try:
+                self.chart.removeSeries(series)
+            except RuntimeError:
+                pass  # Series may already be removed
+        self._waterfall_series = []
+
+        # Remove old waterfall axes if they exist
+        try:
+            if hasattr(self, '_waterfall_x_axis') and self._waterfall_x_axis is not None:
+                if self._waterfall_x_axis in self.chart.axes():
+                    self.chart.removeAxis(self._waterfall_x_axis)
+                self._waterfall_x_axis = None
+            if hasattr(self, '_waterfall_y_axis') and self._waterfall_y_axis is not None:
+                if self._waterfall_y_axis in self.chart.axes():
+                    self.chart.removeAxis(self._waterfall_y_axis)
+                self._waterfall_y_axis = None
+        except RuntimeError:
+            pass  # Axes may already be removed
+
+        # Check if we have data to display
+        if not hasattr(self, '_selected_assets') or not hasattr(self, '_liabilities'):
+            self.waterfall_legend_label.setText("No data available")
+            return
+
+        # Get timeline data
+        timeline = self._simulate_waterfall_timeline()
+        if not timeline['debts'] or not timeline['months']:
+            self.waterfall_legend_label.setText("No debts to display")
+            return
+
+        months = timeline['months']
+        debts = timeline['debts']
+
+        # Create line series for each debt (simpler and more reliable than area series)
+        legend_items = []
+        max_balance = 0
+
+        for debt in debts:
+            line_series = QLineSeries()
+            line_series.setName(debt['name'])
+
+            for i, m in enumerate(months):
+                balance = debt['balances'][i]
+                line_series.append(m, balance)
+                max_balance = max(max_balance, balance)
+
+            # Style the line
+            color = QColor(debt['color'])
+            pen = QPen(color)
+            pen.setWidth(3)
+            line_series.setPen(pen)
+
+            self.chart.addSeries(line_series)
+            self._waterfall_series.append(line_series)
+            legend_items.append((debt['name'], debt['color'], debt['is_efund']))
+
+        # Create axes for waterfall
+        self._waterfall_x_axis = QValueAxis()
+        self._waterfall_x_axis.setTitleText("Months")
+        max_months = max(months) if months else 12
+        self._waterfall_x_axis.setRange(0, max_months)
+        self._waterfall_x_axis.setLabelFormat("%.0f")
+        self.chart.addAxis(self._waterfall_x_axis, Qt.AlignmentFlag.AlignBottom)
+
+        self._waterfall_y_axis = QValueAxis()
+        self._waterfall_y_axis.setTitleText("Balance ($)")
+        self._waterfall_y_axis.setRange(0, max_balance * 1.1 if max_balance > 0 else 1000)
+        self._waterfall_y_axis.setLabelFormat("$%.0f")
+        self.chart.addAxis(self._waterfall_y_axis, Qt.AlignmentFlag.AlignLeft)
+
+        # Attach axes to all series
+        for series in self._waterfall_series:
+            series.attachAxis(self._waterfall_x_axis)
+            series.attachAxis(self._waterfall_y_axis)
+
+        # Update legend with colored bullets
+        legend_parts = []
+        for name, color, is_efund in legend_items:
+            legend_parts.append(f"<span style='color:{color};'>\u25cf</span> {name}")
+        self.waterfall_legend_label.setText(" | ".join(legend_parts))
 
     def _update_display(self):
         """Update the results display labels."""

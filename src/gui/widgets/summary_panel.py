@@ -181,6 +181,19 @@ class SummaryPanel(QWidget):
         self.cash_card = SummaryCard("Cash", compact=True)
         assets_layout.addWidget(self.cash_card, 2, 1)
 
+        # Row 4: Metal ounces
+        self.gold_oz_card = SummaryCard("Gold (oz)", compact=True)
+        assets_layout.addWidget(self.gold_oz_card, 3, 0)
+
+        self.silver_oz_card = SummaryCard("Silver (oz)", compact=True)
+        assets_layout.addWidget(self.silver_oz_card, 3, 1)
+
+        self.platinum_oz_card = SummaryCard("Platinum (oz)", compact=True)
+        assets_layout.addWidget(self.platinum_oz_card, 3, 2)
+
+        self.palladium_oz_card = SummaryCard("Palladium (oz)", compact=True)
+        assets_layout.addWidget(self.palladium_oz_card, 3, 3)
+
         layout.addLayout(assets_layout)
 
         # Separator
@@ -311,6 +324,18 @@ class SummaryPanel(QWidget):
 
         cash = by_type.get('cash', {})
         self.cash_card.set_value(f"${cash.get('current_value', 0):,.2f}")
+
+        # Metal ounces
+        metal_ounces = summary.get('metal_ounces', {})
+        gold_oz = metal_ounces.get('GOLD', 0)
+        silver_oz = metal_ounces.get('SILVER', 0)
+        platinum_oz = metal_ounces.get('PLATINUM', 0)
+        palladium_oz = metal_ounces.get('PALLADIUM', 0)
+
+        self.gold_oz_card.set_value(f"{gold_oz:,.2f}" if gold_oz else "0")
+        self.silver_oz_card.set_value(f"{silver_oz:,.2f}" if silver_oz else "0")
+        self.platinum_oz_card.set_value(f"{platinum_oz:,.2f}" if platinum_oz else "0")
+        self.palladium_oz_card.set_value(f"{palladium_oz:,.2f}" if palladium_oz else "0")
 
         # ============ LIABILITY BREAKDOWN ============
         liability_count = liability_summary.get('total_liabilities', 0)
