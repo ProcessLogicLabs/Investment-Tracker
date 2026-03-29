@@ -8,6 +8,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QBrush
+from ..theme import theme, Typography, make_shadow
+from .charts import SpendingBarChart
 
 
 class AnalysisWorker(QThread):
@@ -22,6 +24,7 @@ class AnalysisWorker(QThread):
     def run(self):
         try:
             from ...services.financial_advisor import FinancialAdvisor
+            from ...database.operations import TransactionOperations
             advisor = FinancialAdvisor()
 
             result = {
@@ -30,7 +33,10 @@ class AnalysisWorker(QThread):
                 'recommendations': advisor.get_recommendations(self.extra_monthly),
                 'debt_strategies': advisor.compare_payoff_strategies(self.extra_monthly),
                 'acceleration': advisor.get_payoff_acceleration_analysis(self.extra_monthly) if self.extra_monthly > 0 else None,
-                'projections': advisor.project_net_worth(60)
+                'projections': advisor.project_net_worth(60),
+                'spending_summary': TransactionOperations.get_spending_summary(),
+                'deposit_totals': TransactionOperations.get_deposit_totals(),
+                'transaction_analysis': advisor.get_transaction_spending_analysis(),
             }
 
             self.finished.emit(result)
@@ -45,30 +51,32 @@ class RecommendationCard(QFrame):
         super().__init__(parent)
         self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Raised)
         self.setLineWidth(1)
+        self.setGraphicsEffect(make_shadow(self))
 
+        p = theme().palette
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 10, 15, 10)
 
         # Priority and category
         header = QHBoxLayout()
         priority_label = QLabel(f"Priority {recommendation.priority}")
-        priority_label.setStyleSheet("color: #fff; background-color: #1976D2; padding: 2px 8px; border-radius: 3px; font-size: 11px;")
+        priority_label.setStyleSheet(f"color: {p.text_on_primary}; background-color: {p.accent}; padding: 2px 8px; border-radius: 3px; font-size: {Typography.BODY_SIZE}px;")
         header.addWidget(priority_label)
 
         category_label = QLabel(recommendation.category.upper())
         cat_color = {
-            'debt': '#c62828',
-            'savings': '#2e7d32',
-            'investment': '#1565c0',
-            'emergency': '#ff8f00'
-        }.get(recommendation.category, '#666')
-        category_label.setStyleSheet(f"color: {cat_color}; font-weight: bold; font-size: 11px;")
+            'debt': p.negative,
+            'savings': p.positive,
+            'investment': p.accent,
+            'emergency': p.warning
+        }.get(recommendation.category, p.muted)
+        category_label.setStyleSheet(f"color: {cat_color}; font-weight: bold; font-size: {Typography.BODY_SIZE}px;")
         header.addWidget(category_label)
         header.addStretch()
 
         if recommendation.potential_savings > 0:
             savings_label = QLabel(f"Potential savings: ${recommendation.potential_savings:,.0f}")
-            savings_label.setStyleSheet("color: #2e7d32; font-weight: bold;")
+            savings_label.setStyleSheet(f"color: {p.positive}; font-weight: bold;")
             header.addWidget(savings_label)
 
         layout.addLayout(header)
@@ -76,7 +84,7 @@ class RecommendationCard(QFrame):
         # Title
         title = QLabel(recommendation.title)
         title_font = QFont()
-        title_font.setPointSize(12)
+        title_font.setPointSize(Typography.H2_SIZE - 2)
         title_font.setBold(True)
         title.setFont(title_font)
         title.setWordWrap(True)
@@ -85,7 +93,7 @@ class RecommendationCard(QFrame):
         # Description
         desc = QLabel(recommendation.description)
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #444; margin: 5px 0;")
+        desc.setStyleSheet(f"color: {p.text_secondary}; margin: 5px 0;")
         layout.addWidget(desc)
 
         # Action items
@@ -97,7 +105,7 @@ class RecommendationCard(QFrame):
             for action in recommendation.action_items:
                 action_item = QLabel(f"  • {action}")
                 action_item.setWordWrap(True)
-                action_item.setStyleSheet("color: #555;")
+                action_item.setStyleSheet(f"color: {p.text_secondary};")
                 layout.addWidget(action_item)
 
 
@@ -151,7 +159,7 @@ class DebtStrategyTable(QWidget):
                 saved_item = QTableWidgetItem(f"${saved:,.2f}")
                 saved_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 if saved > 0:
-                    saved_item.setForeground(QBrush(QColor('#2e7d32')))
+                    saved_item.setForeground(QBrush(QColor(theme().palette.positive)))
                 self.table.setItem(row, 4, saved_item)
             else:
                 self.table.setItem(row, 4, QTableWidgetItem("—"))
@@ -166,12 +174,14 @@ class SummaryCard(QFrame):
         super().__init__(parent)
         self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Raised)
         self.setLineWidth(1)
+        self.setGraphicsEffect(make_shadow(self))
 
+        p = theme().palette
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 10, 15, 10)
 
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet("color: #666; font-size: 11px;")
+        self.title_label.setStyleSheet(f"color: {p.text_secondary}; font-size: {Typography.BODY_SIZE}px;")
         layout.addWidget(self.title_label)
 
         self.value_label = QLabel(value)
@@ -220,7 +230,7 @@ class AnalysisPanel(QWidget):
         controls.addWidget(self.analyze_btn)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #666; font-style: italic;")
+        self.status_label.setStyleSheet(f"color: {theme().palette.text_secondary}; font-style: italic;")
         controls.addWidget(self.status_label)
 
         controls.addStretch()
@@ -303,6 +313,46 @@ class AnalysisPanel(QWidget):
 
         self.tabs.addTab(cashflow_widget, "Cash Flow")
 
+        # Tab 4: Spending Analysis (from imported transactions)
+        spending_scroll = QScrollArea()
+        spending_scroll.setWidgetResizable(True)
+        spending_widget = QWidget()
+        self.spending_layout = QVBoxLayout(spending_widget)
+        self.spending_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # Spending summary cards
+        spending_summary_widget = QWidget()
+        spending_summary_grid = QGridLayout(spending_summary_widget)
+        spending_summary_grid.setSpacing(10)
+
+        self.txn_total_spending_card = SummaryCard("Total Spending")
+        spending_summary_grid.addWidget(self.txn_total_spending_card, 0, 0)
+
+        self.txn_total_deposits_card = SummaryCard("Total Deposits")
+        spending_summary_grid.addWidget(self.txn_total_deposits_card, 0, 1)
+
+        self.txn_net_card = SummaryCard("Net (Deposits - Spending)")
+        spending_summary_grid.addWidget(self.txn_net_card, 0, 2)
+
+        self.txn_count_card = SummaryCard("Transaction Count")
+        spending_summary_grid.addWidget(self.txn_count_card, 0, 3)
+
+        self.spending_layout.addWidget(spending_summary_widget)
+
+        # Spending bar chart
+        self.spending_bar_chart = SpendingBarChart()
+        self.spending_bar_chart.setMinimumHeight(400)
+        self.spending_layout.addWidget(self.spending_bar_chart)
+
+        # Spending detail text
+        self.spending_detail_text = QTextEdit()
+        self.spending_detail_text.setReadOnly(True)
+        self.spending_detail_text.setMaximumHeight(300)
+        self.spending_layout.addWidget(self.spending_detail_text)
+
+        spending_scroll.setWidget(spending_widget)
+        self.tabs.addTab(spending_scroll, "Spending Analysis")
+
         layout.addWidget(self.tabs)
 
     def run_analysis(self):
@@ -334,20 +384,21 @@ class AnalysisPanel(QWidget):
             return
 
         # Update summary cards
+        p = theme().palette
         summary = self.analysis_data.get('net_worth_summary', {})
         net_worth = summary.get('net_worth', 0)
-        nw_color = '#2e7d32' if net_worth >= 0 else '#c62828'
+        nw_color = p.positive if net_worth >= 0 else p.negative
         self.net_worth_card.set_value(f"${net_worth:,.2f}", nw_color)
 
         cash_flow = self.analysis_data.get('cash_flow', {})
         interest = cash_flow.get('interest_portion', 0)
-        self.monthly_interest_card.set_value(f"${interest:,.2f}", '#c62828' if interest > 0 else None)
+        self.monthly_interest_card.set_value(f"${interest:,.2f}", p.negative if interest > 0 else None)
 
         future_interest = summary.get('total_future_interest', 0)
         if future_interest == float('inf'):
-            self.future_interest_card.set_value("Cannot pay off", '#c62828')
+            self.future_interest_card.set_value("Cannot pay off", p.negative)
         else:
-            self.future_interest_card.set_value(f"${future_interest:,.2f}", '#c62828' if future_interest > 0 else None)
+            self.future_interest_card.set_value(f"${future_interest:,.2f}", p.negative if future_interest > 0 else None)
 
         # Debt-free timeline
         strategies = self.analysis_data.get('debt_strategies', {})
@@ -360,7 +411,7 @@ class AnalysisPanel(QWidget):
             else:
                 self.debt_free_card.set_value(f"{months} months")
         else:
-            self.debt_free_card.set_value("Debt-free!", '#2e7d32')
+            self.debt_free_card.set_value("Debt-free!", p.positive)
 
         # Update recommendations
         self._update_recommendations()
@@ -384,6 +435,9 @@ class AnalysisPanel(QWidget):
         # Update cash flow
         self._update_cashflow()
 
+        # Update spending analysis
+        self._update_spending()
+
     def _update_recommendations(self):
         """Update recommendations display."""
         # Clear existing
@@ -396,7 +450,7 @@ class AnalysisPanel(QWidget):
 
         if not recommendations:
             label = QLabel("No recommendations available. Add assets and liabilities to get personalized advice.")
-            label.setStyleSheet("color: #666; font-style: italic;")
+            label.setStyleSheet(f"color: {theme().palette.text_secondary}; font-style: italic;")
             self.recommendations_layout.addWidget(label)
         else:
             for rec in recommendations:
@@ -421,7 +475,7 @@ class AnalysisPanel(QWidget):
                 self.payoff_order_layout.addWidget(label)
         else:
             label = QLabel("No debts to pay off or add liabilities to see payoff order.")
-            label.setStyleSheet("color: #666; font-style: italic;")
+            label.setStyleSheet(f"color: {theme().palette.text_secondary}; font-style: italic;")
             self.payoff_order_layout.addWidget(label)
 
     def _update_cashflow(self):
@@ -496,6 +550,88 @@ class AnalysisPanel(QWidget):
         text.append("=" * 50)
 
         self.cashflow_text.setPlainText("\n".join(text))
+
+    def _update_spending(self):
+        """Update spending analysis tab with transaction data."""
+        p = theme().palette
+        spending = self.analysis_data.get('spending_summary', {})
+        deposits = self.analysis_data.get('deposit_totals', {})
+        txn_analysis = self.analysis_data.get('transaction_analysis', {})
+
+        # Summary cards
+        total_spending = sum(d['total'] for d in spending.values()) if spending else 0
+        total_count = sum(d['count'] for d in spending.values()) if spending else 0
+        total_deposits = deposits.get('total', 0)
+        deposit_count = deposits.get('count', 0)
+        net = total_deposits + total_spending  # spending is negative
+
+        self.txn_total_spending_card.set_value(f"${abs(total_spending):,.2f}", p.negative if total_spending else None)
+        self.txn_total_deposits_card.set_value(f"${total_deposits:,.2f}", p.positive if total_deposits else None)
+
+        net_color = p.positive if net >= 0 else p.negative
+        self.txn_net_card.set_value(f"${net:+,.2f}", net_color)
+        self.txn_count_card.set_value(str(total_count + deposit_count))
+
+        # Bar chart
+        self.spending_bar_chart.update_chart(spending)
+
+        # Detail text
+        text = []
+        text.append("=" * 60)
+        text.append("TRANSACTION SPENDING ANALYSIS")
+        text.append("=" * 60)
+
+        if not spending:
+            text.append("")
+            text.append("  No transaction data available.")
+            text.append("  Import bank/credit card CSV files to see spending analysis.")
+        else:
+            text.append("")
+            text.append("SPENDING BY CATEGORY:")
+            text.append(f"  {'Category':<20s}  {'Count':>6s}  {'Total':>12s}  {'Average':>10s}")
+            text.append(f"  {'─' * 52}")
+
+            sorted_cats = sorted(spending.items(), key=lambda x: x[1]['total'])
+            for cat, data in sorted_cats:
+                text.append(f"  {cat.title():<20s}  {data['count']:>6d}  "
+                           f"${abs(data['total']):>11,.2f}  ${abs(data['avg']):>9,.2f}")
+
+            text.append(f"  {'─' * 52}")
+            avg_txn = total_spending / total_count if total_count else 0
+            text.append(f"  {'TOTAL':<20s}  {total_count:>6d}  "
+                       f"${abs(total_spending):>11,.2f}  ${abs(avg_txn):>9,.2f}")
+
+            if total_deposits > 0:
+                text.append("")
+                text.append("DEPOSITS/INCOME:")
+                text.append(f"  Total Deposits:     ${total_deposits:>12,.2f}  ({deposit_count} transactions)")
+                text.append(f"  Net Cash Flow:      ${net:>+12,.2f}")
+
+            # Add comparison with budgeted expenses if available
+            if txn_analysis:
+                budgeted = txn_analysis.get('budgeted_monthly_expenses', 0)
+                actual_monthly = txn_analysis.get('actual_monthly_spending', 0)
+                if budgeted > 0 and actual_monthly > 0:
+                    text.append("")
+                    text.append("BUDGET vs ACTUAL:")
+                    text.append(f"  Budgeted Monthly:   ${budgeted:>12,.2f}")
+                    text.append(f"  Actual Monthly:     ${actual_monthly:>12,.2f}")
+                    diff = budgeted - actual_monthly
+                    if diff >= 0:
+                        text.append(f"  Under Budget:       ${diff:>12,.2f}")
+                    else:
+                        text.append(f"  Over Budget:        ${abs(diff):>12,.2f}  *** WARNING ***")
+
+                top_merchants = txn_analysis.get('top_merchants', [])
+                if top_merchants:
+                    text.append("")
+                    text.append("TOP MERCHANTS BY SPENDING:")
+                    for i, (merchant, amount) in enumerate(top_merchants[:10], 1):
+                        text.append(f"  {i:>2d}. {merchant:<30s}  ${abs(amount):>10,.2f}")
+
+        text.append("")
+        text.append("=" * 60)
+        self.spending_detail_text.setPlainText("\n".join(text))
 
     def refresh(self):
         """Refresh analysis with current data."""

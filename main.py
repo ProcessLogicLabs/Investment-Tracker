@@ -23,6 +23,10 @@ def main():
     # Set application style
     app.setStyle("Fusion")
 
+    # Apply theme (must happen before MainWindow construction)
+    from src.gui.theme import ThemeManager
+    ThemeManager.instance().apply_initial()
+
     window = MainWindow()
     window.show()
 

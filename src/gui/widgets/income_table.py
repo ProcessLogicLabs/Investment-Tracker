@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush, QAction
 from ...database.models import Income
+from ..theme import theme
 
 
 class IncomeTableWidget(QWidget):
@@ -114,23 +115,24 @@ class IncomeTableWidget(QWidget):
         self.table.setItem(row, 4, QTableWidgetItem(freq_display))
 
         # Monthly Amount
+        p = theme().palette
         monthly_item = QTableWidgetItem(f"${income.monthly_amount:,.2f}")
         monthly_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        monthly_item.setForeground(QBrush(QColor('#2e7d32')))  # Green for income
+        monthly_item.setForeground(QBrush(QColor(p.positive)))  # Green for income
         self.table.setItem(row, 5, monthly_item)
 
         # Annual Amount
         annual_item = QTableWidgetItem(f"${income.annual_amount:,.2f}")
         annual_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        annual_item.setForeground(QBrush(QColor('#2e7d32')))  # Green for income
+        annual_item.setForeground(QBrush(QColor(p.positive)))  # Green for income
         self.table.setItem(row, 6, annual_item)
 
         # Status
         status_item = QTableWidgetItem('Active' if income.is_active else 'Inactive')
         if income.is_active:
-            status_item.setForeground(QBrush(QColor('#2e7d32')))  # Green
+            status_item.setForeground(QBrush(QColor(p.positive)))  # Green
         else:
-            status_item.setForeground(QBrush(QColor('#757575')))  # Gray
+            status_item.setForeground(QBrush(QColor(p.muted)))  # Gray
         self.table.setItem(row, 7, status_item)
 
         # Start Date

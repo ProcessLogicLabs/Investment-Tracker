@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
-from ...database.operations import AssetOperations, LiabilityOperations, IncomeOperations, ExpenseOperations
+from ...database.operations import AssetOperations, LiabilityOperations, IncomeOperations, ExpenseOperations, TransactionOperations
 
 
 class AnalysisReportDialog(QDialog):
@@ -101,8 +101,95 @@ class AnalysisReportDialog(QDialog):
             'payoff_order': payoff_order
         }
 
+    def _calculate_freed_cashflow_invested(self, lump_sum: float, debts: List,
+                                            years: int = 10, investment_return: float = 0.07) -> float:
+        """Calculate value of freed-up monthly payments invested over time.
+
+        When debt is paid off early with a lump sum, the monthly payments are freed up
+        and could be invested. This calculates the future value of those freed payments.
+        """
+        if not debts or lump_sum <= 0:
+            return 0.0
+
+        monthly_return = (1 + investment_return) ** (1/12) - 1
+        total_months = years * 12
+        max_sim_months = 600
+
+        # Calculate payoff month for each debt WITHOUT lump sum (baseline)
+        baseline_payoff_months = {}
+        balances_baseline = {d.id: d.current_balance for d in debts}
+
+        month = 0
+        while any(b > 0.01 for b in balances_baseline.values()) and month < max_sim_months:
+            month += 1
+            for d in debts:
+                if balances_baseline[d.id] > 0:
+                    interest = balances_baseline[d.id] * d.monthly_interest_rate
+                    balances_baseline[d.id] += interest
+                    pmt = min(d.monthly_payment, balances_baseline[d.id])
+                    balances_baseline[d.id] -= pmt
+                    if balances_baseline[d.id] <= 0.01 and d.id not in baseline_payoff_months:
+                        baseline_payoff_months[d.id] = month
+
+        for d in debts:
+            if d.id not in baseline_payoff_months:
+                baseline_payoff_months[d.id] = max_sim_months
+
+        # Calculate payoff month for each debt WITH lump sum (avalanche method)
+        lumpsum_payoff_months = {}
+        balances_payoff = {d.id: d.current_balance for d in debts}
+        remaining_lump = lump_sum
+
+        # Apply lump sum to debts in order of interest rate (highest first)
+        sorted_debts = sorted(debts, key=lambda x: x.interest_rate, reverse=True)
+        for d in sorted_debts:
+            if remaining_lump <= 0:
+                break
+            payoff_amount = min(remaining_lump, balances_payoff[d.id])
+            balances_payoff[d.id] -= payoff_amount
+            remaining_lump -= payoff_amount
+            if balances_payoff[d.id] <= 0.01:
+                lumpsum_payoff_months[d.id] = 0
+
+        # Simulate remaining payoff
+        month = 0
+        while any(b > 0.01 for b in balances_payoff.values()) and month < max_sim_months:
+            month += 1
+            for d in debts:
+                if balances_payoff[d.id] > 0:
+                    interest = balances_payoff[d.id] * d.monthly_interest_rate
+                    balances_payoff[d.id] += interest
+                    pmt = min(d.monthly_payment, balances_payoff[d.id])
+                    balances_payoff[d.id] -= pmt
+                    if balances_payoff[d.id] <= 0.01 and d.id not in lumpsum_payoff_months:
+                        lumpsum_payoff_months[d.id] = month
+
+        for d in debts:
+            if d.id not in lumpsum_payoff_months:
+                lumpsum_payoff_months[d.id] = max_sim_months
+
+        # Calculate value of freed cashflow invested
+        total_invested_value = 0.0
+
+        for month in range(1, total_months + 1):
+            freed_this_month = 0.0
+            for d in debts:
+                if lumpsum_payoff_months[d.id] < month <= baseline_payoff_months[d.id]:
+                    freed_this_month += d.monthly_payment
+
+            if freed_this_month > 0:
+                months_to_grow = total_months - month
+                future_value = freed_this_month * ((1 + monthly_return) ** months_to_grow)
+                total_invested_value += future_value
+
+        return total_invested_value
+
     def _analyze_liquidation(self, asset, liabilities: List) -> Dict[str, Any]:
-        """Analyze selling an asset to pay off debt."""
+        """Analyze selling an asset to pay off debt.
+
+        Includes both interest saved and the value of freed-up monthly payments
+        that could be invested over a 10-year period.
+        """
         cost_basis = asset.total_cost
         current_value = asset.current_value
         gain_loss = current_value - cost_basis
@@ -130,23 +217,38 @@ class AnalysisReportDialog(QDialog):
                 interest_saved += debt.total_interest_remaining * pct_paid * 0.8
                 remaining = 0
 
+        # Calculate value of freed-up cashflow invested over 10 years
+        freed_cashflow_invested = self._calculate_freed_cashflow_invested(net_proceeds, liabilities)
+
+        # Total benefit = interest saved + freed cashflow invested
+        total_benefit = interest_saved + freed_cashflow_invested
+
         total_debt = sum(l.current_balance for l in liabilities)
         debt_remaining = total_debt - (net_proceeds - remaining)
 
         high_interest = any(d.interest_rate > 15 for d in debts_by_rate)
         is_at_loss = gain_loss < 0
 
-        if high_interest and interest_saved > tax_liability:
+        # Compare against investing the proceeds at 7% for 10 years
+        investment_value = net_proceeds * ((1 + 0.07) ** 10) if net_proceeds > 0 else 0
+        investment_growth = investment_value - net_proceeds
+        favors_debt_payoff = total_benefit > investment_growth
+
+        if high_interest and total_benefit > tax_liability:
             if is_at_loss:
                 rec = "STRONGLY RECOMMENDED: Sell to eliminate high-interest debt. Loss offsets gains."
-            elif interest_saved > tax_liability * 2:
-                rec = "RECOMMENDED: Interest savings significantly exceed tax cost."
+            elif favors_debt_payoff:
+                rec = f"RECOMMENDED: Debt payoff benefit (${total_benefit:,.0f}) exceeds expected investment growth."
+            elif total_benefit > tax_liability * 2:
+                rec = "RECOMMENDED: Total benefit significantly exceeds tax cost."
             else:
-                rec = "CONSIDER: Interest savings exceed tax cost."
+                rec = "CONSIDER: Benefits exceed tax cost, but investing may yield more."
         elif is_at_loss and high_interest:
             rec = "CONSIDER: Tax-loss harvesting opportunity."
         elif cost_basis > 0 and gain_loss / cost_basis > 0.5:
             rec = "CAUTION: Large unrealized gain. Consider partial sale."
+        elif favors_debt_payoff:
+            rec = f"CONSIDER: Debt payoff benefit (${total_benefit:,.0f}) exceeds investment growth."
         else:
             rec = "OPTIONAL: May help accelerate debt freedom."
 
@@ -160,6 +262,8 @@ class AnalysisReportDialog(QDialog):
             'net_proceeds': net_proceeds,
             'debts_eliminated': debts_eliminated,
             'interest_saved': interest_saved,
+            'freed_cashflow_invested': freed_cashflow_invested,
+            'total_benefit': total_benefit,
             'remaining_debt': max(0, debt_remaining),
             'recommendation': rec
         }
@@ -335,6 +439,91 @@ class AnalysisReportDialog(QDialog):
                 category_label = "Essential" if expense.is_essential else "Discretionary"
                 lines.append(f"    {i}. {expense.name}: {self._format_currency(expense.monthly_amount)}/mo ({category_label})")
 
+        # Transaction Spending Analysis
+        spending_summary = TransactionOperations.get_spending_summary()
+        non_spending = TransactionOperations.get_non_spending_summary()
+        deposit_totals = TransactionOperations.get_deposit_totals()
+
+        if spending_summary or non_spending:
+            section("ACTUAL SPENDING (FROM TRANSACTIONS)")
+            lines.append("")
+
+            total_spending = abs(sum(d['total'] for d in spending_summary.values()))
+            total_txn_count = sum(d['count'] for d in spending_summary.values())
+            total_deposits = deposit_totals.get('total', 0)
+            deposit_count = deposit_totals.get('count', 0)
+            total_non_spending = abs(sum(d['total'] for d in non_spending.values()))
+
+            lines.append(f"  Income (deposits):      {self._format_currency(total_deposits)}  ({deposit_count} transactions)")
+            lines.append(f"  Spending:               {self._format_currency(total_spending)}  ({total_txn_count} transactions)")
+            lines.append(f"  Debt/Transfers Out:     {self._format_currency(total_non_spending)}")
+            lines.append(f"  Net (Income - Spending): {self._format_currency(total_deposits - total_spending)}")
+
+            if spending_summary:
+                lines.append("")
+                lines.append("  Spending by Category:")
+                lines.append(f"    {'Category':<20s}  {'Count':>5s}  {'Total':>12s}  {'Average':>10s}  {'% of Total':>10s}")
+                lines.append(f"    {'─' * 62}")
+
+                sorted_cats = sorted(spending_summary.items(), key=lambda x: x[1]['total'])
+                for cat, data in sorted_cats:
+                    pct = (abs(data['total']) / total_spending * 100) if total_spending > 0 else 0
+                    lines.append(f"    {cat.title():<20s}  {data['count']:>5d}  "
+                               f"${abs(data['total']):>11,.2f}  ${abs(data['avg']):>9,.2f}  {pct:>9.1f}%")
+
+                lines.append(f"    {'─' * 62}")
+                avg_txn = total_spending / total_txn_count if total_txn_count else 0
+                lines.append(f"    {'TOTAL':<20s}  {total_txn_count:>5d}  "
+                           f"${total_spending:>11,.2f}  ${avg_txn:>9,.2f}  {'100.0':>9s}%")
+
+            if non_spending:
+                lines.append("")
+                lines.append("  Non-Spending Outflows:")
+                for cat, data in sorted(non_spending.items(), key=lambda x: x[1]['total']):
+                    lines.append(f"    {cat.title():<20s}  {data['count']:>5d}  ${abs(data['total']):>11,.2f}")
+
+            # Compare budgeted vs actual
+            if expenses and total_spending > 0:
+                lines.append("")
+                lines.append("  Budget vs Actual Comparison:")
+
+                all_txns = TransactionOperations.get_all(limit=10000)
+                dates = [t.transaction_date for t in all_txns if t.transaction_date]
+                if dates:
+                    from datetime import datetime
+                    try:
+                        d1 = datetime.strptime(min(dates), '%Y-%m-%d')
+                        d2 = datetime.strptime(max(dates), '%Y-%m-%d')
+                        days_span = max((d2 - d1).days, 1)
+                        months_span = max(days_span / 30.44, 1)
+                    except ValueError:
+                        months_span = 1
+
+                    actual_monthly = total_spending / months_span
+                    lines.append(f"    Transaction Period:    {min(dates)} to {max(dates)} ({months_span:.1f} months)")
+                    lines.append(f"    Actual Monthly Avg:    {self._format_currency(actual_monthly)}")
+                    lines.append(f"    Budgeted Monthly:      {self._format_currency(total_monthly_expenses)}")
+
+                    diff = total_monthly_expenses - actual_monthly
+                    if diff >= 0:
+                        lines.append(f"    Under Budget:          {self._format_currency(diff)}/mo")
+                    else:
+                        lines.append(f"    OVER Budget:           {self._format_currency(abs(diff))}/mo  *** WARNING ***")
+
+            # Top merchants (spending only, exclude debt/transfers)
+            non_spending_cats = TransactionOperations.NON_SPENDING_CATEGORIES
+            merchant_totals = {}
+            all_txns = TransactionOperations.get_all(limit=10000)
+            for txn in all_txns:
+                if txn.amount < 0 and txn.category not in non_spending_cats:
+                    merchant_totals[txn.description] = merchant_totals.get(txn.description, 0) + txn.amount
+            if merchant_totals:
+                top = sorted(merchant_totals.items(), key=lambda x: x[1])[:10]
+                lines.append("")
+                lines.append("  Top 10 Merchants by Spending:")
+                for i, (merchant, amount) in enumerate(top, 1):
+                    lines.append(f"    {i:>2d}. {merchant:<40s}  {self._format_currency(abs(amount))}")
+
         # Debt Analysis
         if liabilities:
             total_monthly_debt = sum(l.monthly_payment for l in liabilities)
@@ -395,7 +584,7 @@ class AnalysisReportDialog(QDialog):
                     scenario = self._analyze_liquidation(asset, liabilities)
                     scenarios.append(scenario)
 
-            scenarios.sort(key=lambda x: x['interest_saved'], reverse=True)
+            scenarios.sort(key=lambda x: x['total_benefit'], reverse=True)
 
             for i, scenario in enumerate(scenarios, 1):
                 lines.append(f"  OPTION {i}: Sell {scenario['asset_name']} ({scenario['asset_type']})")
@@ -407,6 +596,8 @@ class AnalysisReportDialog(QDialog):
                 lines.append(f"    Est. Tax:         {self._format_currency(scenario['estimated_tax'])}")
                 lines.append(f"    Net Proceeds:     {self._format_currency(scenario['net_proceeds'])}")
                 lines.append(f"    Interest Saved:   {self._format_currency(scenario['interest_saved'])}")
+                lines.append(f"    Cashflow Invested:{self._format_currency(scenario['freed_cashflow_invested'])} (10yr @ 7%)")
+                lines.append(f"    Total Benefit:    {self._format_currency(scenario['total_benefit'])}")
                 if scenario['debts_eliminated']:
                     lines.append(f"    Debts Eliminated: {', '.join(scenario['debts_eliminated'])}")
                 lines.append(f"    Remaining Debt:   {self._format_currency(scenario['remaining_debt'])}")
@@ -439,11 +630,30 @@ class AnalysisReportDialog(QDialog):
             net_monthly_cash_flow = total_monthly_income - total_outflow
 
             lines.append(f"  Monthly Income:         {self._format_currency(total_monthly_income)}")
-            lines.append(f"  Monthly Expenses:       {self._format_currency(total_monthly_expenses)}")
+            lines.append(f"  Monthly Expenses:       {self._format_currency(total_monthly_expenses)}  (budgeted)")
             lines.append(f"  Monthly Debt Payments:  {self._format_currency(monthly_debt_payments)}")
             lines.append(f"  Total Monthly Outflow:  {self._format_currency(total_outflow)}")
             lines.append(f"  Net Monthly Cash Flow:  {self._format_currency(net_monthly_cash_flow)}")
             lines.append(f"  Projected Annual:       {self._format_currency(net_monthly_cash_flow * 12)}")
+
+            # Show actual spending from transactions if available
+            if spending_summary:
+                actual_total = abs(sum(d['total'] for d in spending_summary.values()))
+                txn_dates = [t.transaction_date for t in TransactionOperations.get_all(limit=10000) if t.transaction_date]
+                if txn_dates:
+                    from datetime import datetime as dt
+                    try:
+                        d1 = dt.strptime(min(txn_dates), '%Y-%m-%d')
+                        d2 = dt.strptime(max(txn_dates), '%Y-%m-%d')
+                        m_span = max((d2 - d1).days / 30.44, 1)
+                        actual_monthly_avg = actual_total / m_span
+                        lines.append("")
+                        lines.append(f"  Actual Spending (txns): {self._format_currency(actual_monthly_avg)}/mo avg")
+                        actual_outflow = monthly_debt_payments + actual_monthly_avg
+                        actual_net = total_monthly_income - actual_outflow
+                        lines.append(f"  Actual Net Cash Flow:   {self._format_currency(actual_net)}")
+                    except ValueError:
+                        pass
 
             if total_monthly_income > 0:
                 # Debt-to-Income Ratio (only debt payments, not expenses)

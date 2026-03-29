@@ -9,15 +9,16 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QIcon
 
 from ..database.models import init_database
-from ..database.operations import AssetOperations, PriceHistoryOperations, SettingsOperations, LiabilityOperations, IncomeOperations, ExpenseOperations
+from ..database.operations import AssetOperations, PriceHistoryOperations, SettingsOperations, LiabilityOperations, IncomeOperations, ExpenseOperations, GoalOperations, PaymentOperations, TransactionOperations
 from ..services.updater import ScheduledUpdater
+from .theme import ThemeManager, theme
 from .widgets.asset_table import AssetTableWidget
 from .widgets.liability_table import LiabilityTableWidget
 from .widgets.income_table import IncomeTableWidget
 from .widgets.expense_table import ExpenseTableWidget
-from .widgets.summary_panel import SummaryPanel
-from .widgets.charts import ChartWidget
+from .widgets.dashboard import DashboardPanel
 from .widgets.analysis_panel import AnalysisPanel
+from .widgets.transaction_table import TransactionTableWidget
 from .dialogs.add_asset import AddAssetDialog
 from .dialogs.add_liability import AddLiabilityDialog
 from .dialogs.add_income import AddIncomeDialog
@@ -25,6 +26,9 @@ from .dialogs.add_expense import AddExpenseDialog
 from .dialogs.settings import SettingsDialog
 from .dialogs.analysis_report import AnalysisReportDialog
 from .dialogs.debt_payoff_simulation import DebtPayoffSimulationWizard
+from .dialogs.add_goal import AddGoalDialog
+from .dialogs.add_transaction import AddTransactionDialog
+from .dialogs.import_transactions import ImportTransactionsDialog
 from ..utils.export import ExcelExporter
 
 
@@ -62,7 +66,15 @@ class MainWindow(QMainWindow):
         self.main_tabs = QTabWidget()
         self.main_tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        # Tab 1: Portfolio (Asset Table)
+        # Tab 1: Dashboard
+        dashboard_tab = QWidget()
+        dashboard_layout = QVBoxLayout(dashboard_tab)
+        dashboard_layout.setContentsMargins(5, 5, 5, 5)
+        self.dashboard = DashboardPanel()
+        dashboard_layout.addWidget(self.dashboard)
+        self.main_tabs.addTab(dashboard_tab, "Dashboard")
+
+        # Tab 2: Assets
         portfolio_tab = QWidget()
         portfolio_layout = QVBoxLayout(portfolio_tab)
         portfolio_layout.setContentsMargins(5, 5, 5, 5)
@@ -70,7 +82,7 @@ class MainWindow(QMainWindow):
         portfolio_layout.addWidget(self.asset_table)
         self.main_tabs.addTab(portfolio_tab, "Assets")
 
-        # Tab 2: Liabilities
+        # Tab 3: Liabilities
         liabilities_tab = QWidget()
         liabilities_layout = QVBoxLayout(liabilities_tab)
         liabilities_layout.setContentsMargins(5, 5, 5, 5)
@@ -78,7 +90,7 @@ class MainWindow(QMainWindow):
         liabilities_layout.addWidget(self.liability_table)
         self.main_tabs.addTab(liabilities_tab, "Liabilities")
 
-        # Tab 3: Income
+        # Tab 4: Income
         income_tab = QWidget()
         income_layout = QVBoxLayout(income_tab)
         income_layout.setContentsMargins(5, 5, 5, 5)
@@ -86,7 +98,7 @@ class MainWindow(QMainWindow):
         income_layout.addWidget(self.income_table)
         self.main_tabs.addTab(income_tab, "Income")
 
-        # Tab 4: Expenses
+        # Tab 5: Expenses
         expenses_tab = QWidget()
         expenses_layout = QVBoxLayout(expenses_tab)
         expenses_layout.setContentsMargins(5, 5, 5, 5)
@@ -94,22 +106,13 @@ class MainWindow(QMainWindow):
         expenses_layout.addWidget(self.expense_table)
         self.main_tabs.addTab(expenses_tab, "Expenses")
 
-        # Tab 5: Summary
-        summary_tab = QWidget()
-        summary_layout = QVBoxLayout(summary_tab)
-        summary_layout.setContentsMargins(5, 5, 5, 5)
-        self.summary_panel = SummaryPanel()
-        summary_layout.addWidget(self.summary_panel)
-        summary_layout.addStretch()  # Push summary to top
-        self.main_tabs.addTab(summary_tab, "Summary")
-
-        # Tab 6: Charts
-        charts_tab = QWidget()
-        charts_layout = QVBoxLayout(charts_tab)
-        charts_layout.setContentsMargins(5, 5, 5, 5)
-        self.chart_widget = ChartWidget()
-        charts_layout.addWidget(self.chart_widget)
-        self.main_tabs.addTab(charts_tab, "Charts")
+        # Tab 6: Transactions
+        transactions_tab = QWidget()
+        transactions_layout = QVBoxLayout(transactions_tab)
+        transactions_layout.setContentsMargins(5, 5, 5, 5)
+        self.transaction_table = TransactionTableWidget()
+        transactions_layout.addWidget(self.transaction_table)
+        self.main_tabs.addTab(transactions_tab, "Transactions")
 
         # Tab 7: Analysis
         analysis_tab = QWidget()
@@ -127,6 +130,11 @@ class MainWindow(QMainWindow):
 
         # File menu
         file_menu = menubar.addMenu("&File")
+
+        import_csv_action = QAction("&Import Transactions (CSV)...", self)
+        import_csv_action.setShortcut("Ctrl+Shift+I")
+        import_csv_action.triggered.connect(self._import_transactions)
+        file_menu.addAction(import_csv_action)
 
         export_action = QAction("&Export to Excel...", self)
         export_action.setShortcut("Ctrl+E")
@@ -179,6 +187,13 @@ class MainWindow(QMainWindow):
         delete_liability_action.triggered.connect(self._delete_selected_liability)
         liability_menu.addAction(delete_liability_action)
 
+        liability_menu.addSeparator()
+
+        apply_payments_action = QAction("A&pply Monthly Payments", self)
+        apply_payments_action.setShortcut("Ctrl+P")
+        apply_payments_action.triggered.connect(self._apply_payments)
+        liability_menu.addAction(apply_payments_action)
+
         # Income menu
         income_menu = menubar.addMenu("&Income")
 
@@ -211,38 +226,69 @@ class MainWindow(QMainWindow):
         delete_expense_action.triggered.connect(self._delete_selected_expense)
         expense_menu.addAction(delete_expense_action)
 
+        # Goals menu
+        goals_menu = menubar.addMenu("&Goals")
+
+        add_goal_action = QAction("&Add Goal...", self)
+        add_goal_action.setShortcut("Ctrl+G")
+        add_goal_action.triggered.connect(self._add_goal)
+        goals_menu.addAction(add_goal_action)
+
+        # Transactions menu
+        txn_menu = menubar.addMenu("&Transactions")
+
+        add_txn_action = QAction("&Add Transaction...", self)
+        add_txn_action.setShortcut("Ctrl+T")
+        add_txn_action.triggered.connect(self._add_transaction)
+        txn_menu.addAction(add_txn_action)
+
+        edit_txn_action = QAction("&Edit Transaction...", self)
+        edit_txn_action.triggered.connect(self._edit_selected_transaction)
+        txn_menu.addAction(edit_txn_action)
+
+        delete_txn_action = QAction("&Delete Transaction", self)
+        delete_txn_action.triggered.connect(self._delete_selected_transaction)
+        txn_menu.addAction(delete_txn_action)
+
+        txn_menu.addSeparator()
+
+        import_txn_action = QAction("&Import CSV...", self)
+        import_txn_action.setShortcut("Ctrl+Shift+I")
+        import_txn_action.triggered.connect(self._import_transactions)
+        txn_menu.addAction(import_txn_action)
+
         # View menu
         view_menu = menubar.addMenu("&View")
 
+        dashboard_action = QAction("&Dashboard", self)
+        dashboard_action.setShortcut("Ctrl+1")
+        dashboard_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(0))
+        view_menu.addAction(dashboard_action)
+
         assets_action = QAction("&Assets", self)
-        assets_action.setShortcut("Ctrl+1")
-        assets_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(0))
+        assets_action.setShortcut("Ctrl+2")
+        assets_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(1))
         view_menu.addAction(assets_action)
 
         liabilities_action = QAction("&Liabilities", self)
-        liabilities_action.setShortcut("Ctrl+2")
-        liabilities_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(1))
+        liabilities_action.setShortcut("Ctrl+3")
+        liabilities_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(2))
         view_menu.addAction(liabilities_action)
 
         income_view_action = QAction("&Income", self)
-        income_view_action.setShortcut("Ctrl+3")
-        income_view_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(2))
+        income_view_action.setShortcut("Ctrl+4")
+        income_view_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(3))
         view_menu.addAction(income_view_action)
 
         expenses_view_action = QAction("E&xpenses", self)
-        expenses_view_action.setShortcut("Ctrl+4")
-        expenses_view_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(3))
+        expenses_view_action.setShortcut("Ctrl+5")
+        expenses_view_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(4))
         view_menu.addAction(expenses_view_action)
 
-        summary_action = QAction("&Summary", self)
-        summary_action.setShortcut("Ctrl+5")
-        summary_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(4))
-        view_menu.addAction(summary_action)
-
-        charts_action = QAction("&Charts", self)
-        charts_action.setShortcut("Ctrl+6")
-        charts_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(5))
-        view_menu.addAction(charts_action)
+        transactions_view_action = QAction("&Transactions", self)
+        transactions_view_action.setShortcut("Ctrl+6")
+        transactions_view_action.triggered.connect(lambda: self.main_tabs.setCurrentIndex(5))
+        view_menu.addAction(transactions_view_action)
 
         analysis_action = QAction("A&nalysis", self)
         analysis_action.setShortcut("Ctrl+7")
@@ -279,6 +325,7 @@ class MainWindow(QMainWindow):
         """Set up the toolbar."""
         toolbar = QToolBar("Main Toolbar")
         toolbar.setMovable(False)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.addToolBar(toolbar)
 
         add_action = QAction("Add Asset", self)
@@ -315,6 +362,10 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
+        import_csv_action = QAction("Import CSV", self)
+        import_csv_action.triggered.connect(self._import_transactions)
+        toolbar.addAction(import_csv_action)
+
         export_action = QAction("Export", self)
         export_action.triggered.connect(self._export_to_excel)
         toolbar.addAction(export_action)
@@ -346,6 +397,8 @@ class MainWindow(QMainWindow):
         self.liability_table.edit_requested.connect(self._edit_liability)
         self.liability_table.delete_requested.connect(self._delete_liability)
 
+        self.liability_table.payment_history_requested.connect(self._show_payment_history)
+
         # Income table signals
         self.income_table.income_double_clicked.connect(self._edit_income)
         self.income_table.edit_requested.connect(self._edit_income)
@@ -356,14 +409,32 @@ class MainWindow(QMainWindow):
         self.expense_table.edit_requested.connect(self._edit_expense)
         self.expense_table.delete_requested.connect(self._delete_expense)
 
+        # Transaction table signals
+        self.transaction_table.transaction_double_clicked.connect(self._edit_transaction)
+        self.transaction_table.edit_requested.connect(self._edit_transaction)
+        self.transaction_table.delete_requested.connect(self._delete_transaction)
+
+        # Goal signals
+        self.dashboard.goal_add_requested.connect(self._add_goal)
+        self.dashboard.goal_edit_requested.connect(self._edit_goal)
+        self.dashboard.goal_delete_requested.connect(self._delete_goal)
+
         # Tab change - refresh analysis when switching to Analysis tab
         self.main_tabs.currentChanged.connect(self._on_tab_changed)
+
+        # Theme signals
+        ThemeManager.instance().theme_changed.connect(self._on_theme_changed)
 
         # Updater signals
         self.updater.connect_price_updated(self._on_price_updated)
         self.updater.connect_update_complete(self._on_update_complete)
         self.updater.connect_update_error(self._on_update_error)
         self.updater.connect_progress(self._on_update_progress)
+
+    def _on_theme_changed(self):
+        """Handle theme change."""
+        self.dashboard.apply_theme()
+        self._load_data()
 
     def _on_tab_changed(self, index: int):
         """Handle tab change."""
@@ -387,6 +458,9 @@ class MainWindow(QMainWindow):
 
     def _load_data(self):
         """Load and display all data."""
+        # Auto-apply monthly payments for any due months
+        PaymentOperations.apply_monthly_payments()
+
         assets = AssetOperations.get_all()
         self.asset_table.set_assets(assets)
 
@@ -399,6 +473,9 @@ class MainWindow(QMainWindow):
         expenses = ExpenseOperations.get_all()
         self.expense_table.set_expenses(expenses)
 
+        transactions = TransactionOperations.get_all()
+        self.transaction_table.set_transactions(transactions)
+
         # Get summaries
         asset_summary = AssetOperations.get_portfolio_summary()
         liability_summary = LiabilityOperations.get_liabilities_summary()
@@ -410,6 +487,12 @@ class MainWindow(QMainWindow):
         total_liabilities = liability_summary.get('total_balance', 0)
         net_worth = total_assets - total_liabilities
 
+        # Get portfolio history for sparklines and charts
+        history = PriceHistoryOperations.get_portfolio_history(30)
+
+        # Build net worth history for sparkline
+        net_worth_history = [h['value'] - total_liabilities for h in history]
+
         # Combine summaries for display
         combined_summary = {
             **asset_summary,
@@ -417,12 +500,23 @@ class MainWindow(QMainWindow):
             'net_worth': net_worth,
             'liability_summary': liability_summary,
             'income_summary': income_summary,
-            'expense_summary': expense_summary
+            'expense_summary': expense_summary,
+            'net_worth_history': net_worth_history,
         }
-        self.summary_panel.update_summary(combined_summary)
+        self.dashboard.update_dashboard(combined_summary, asset_summary, assets, history)
 
-        history = PriceHistoryOperations.get_portfolio_history(30)
-        self.chart_widget.update_charts(asset_summary, assets, history)
+        # Update spending breakdown from imported transactions
+        spending_summary = TransactionOperations.get_spending_summary()
+        # Also get deposit totals for the spending section
+        deposit_totals = TransactionOperations.get_deposit_totals()
+        if deposit_totals:
+            spending_summary['__deposits__'] = deposit_totals
+        self.dashboard.update_spending(spending_summary)
+
+        # Refresh goal progress from live data
+        GoalOperations.refresh_all_goal_progress()
+        goals = GoalOperations.get_active()
+        self.dashboard.update_goals(goals)
 
     def _add_asset(self):
         """Show add asset dialog."""
@@ -532,6 +626,64 @@ class MainWindow(QMainWindow):
         self._load_data()
         self.status_label.setText("Liability deleted")
 
+    def _show_payment_history(self, liability_id: int):
+        """Show payment history for a liability."""
+        liability = LiabilityOperations.get_by_id(liability_id)
+        if not liability:
+            return
+
+        payments = PaymentOperations.get_by_liability(liability_id, limit=50)
+        if not payments:
+            QMessageBox.information(
+                self, "Payment History",
+                f"No payment history for '{liability.name}'."
+            )
+            return
+
+        lines = [f"Payment History: {liability.name}\n"]
+        lines.append(f"{'Date':<12} {'Payment':>10} {'Interest':>10} {'Principal':>10} {'Balance':>12}")
+        lines.append("-" * 58)
+        for p in reversed(payments):
+            date_str = p.payment_date or ''
+            lines.append(
+                f"{date_str:<12} ${p.payment_amount:>9,.2f} ${p.interest_portion:>9,.2f} "
+                f"${p.principal_portion:>9,.2f} ${p.balance_after:>11,.2f}"
+            )
+
+        total_paid = sum(p.payment_amount for p in payments)
+        total_interest = sum(p.interest_portion for p in payments)
+        total_principal = sum(p.principal_portion for p in payments)
+        lines.append("-" * 58)
+        lines.append(
+            f"{'Totals':<12} ${total_paid:>9,.2f} ${total_interest:>9,.2f} "
+            f"${total_principal:>9,.2f}"
+        )
+
+        QMessageBox.information(self, "Payment History", "\n".join(lines))
+
+    def _apply_payments(self):
+        """Manually trigger monthly payment application."""
+        results = PaymentOperations.apply_monthly_payments()
+        self._load_data()
+
+        if results:
+            total_applied = sum(r['payment'] for r in results)
+            total_principal = sum(r['principal'] for r in results)
+            total_interest = sum(r['interest'] for r in results)
+            msg = (
+                f"Applied {len(results)} payment(s):\n\n"
+                f"Total Paid: ${total_applied:,.2f}\n"
+                f"Principal: ${total_principal:,.2f}\n"
+                f"Interest: ${total_interest:,.2f}"
+            )
+            QMessageBox.information(self, "Payments Applied", msg)
+            self.status_label.setText(f"{len(results)} payment(s) applied")
+        else:
+            QMessageBox.information(
+                self, "Payments",
+                "No payments to apply. All liabilities are current."
+            )
+
     def _add_income(self):
         """Show add income dialog."""
         dialog = AddIncomeDialog(self)
@@ -640,29 +792,122 @@ class MainWindow(QMainWindow):
         self._load_data()
         self.status_label.setText("Expense deleted")
 
+    def _add_goal(self):
+        """Show add goal dialog."""
+        dialog = AddGoalDialog(self)
+        if dialog.exec():
+            self._load_data()
+            self.status_label.setText("Goal added successfully")
+
+    def _edit_goal(self, goal_id: int):
+        """Show edit dialog for a goal."""
+        goal = GoalOperations.get_by_id(goal_id)
+        if goal:
+            dialog = AddGoalDialog(self, goal)
+            if dialog.exec():
+                self._load_data()
+                self.status_label.setText("Goal updated successfully")
+
+    def _delete_goal(self, goal_id: int):
+        """Delete a goal after confirmation."""
+        goal = GoalOperations.get_by_id(goal_id)
+        if not goal:
+            return
+
+        reply = QMessageBox.question(
+            self, "Confirm Delete",
+            f"Are you sure you want to delete goal '{goal.name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            GoalOperations.delete(goal_id)
+            self._load_data()
+            self.status_label.setText("Goal deleted")
+
+    def _import_transactions(self):
+        """Show import transactions dialog."""
+        dialog = ImportTransactionsDialog(self)
+        if dialog.exec():
+            self._load_data()
+            self.status_label.setText("Transactions imported successfully")
+
+    def _add_transaction(self):
+        """Show add transaction dialog."""
+        dialog = AddTransactionDialog(self)
+        if dialog.exec():
+            self._load_data()
+            self.status_label.setText("Transaction added successfully")
+
+    def _edit_selected_transaction(self):
+        """Edit the currently selected transaction."""
+        txn_id = self.transaction_table.get_selected_transaction_id()
+        if txn_id:
+            self._edit_transaction(txn_id)
+        else:
+            QMessageBox.information(self, "Edit Transaction", "Please select a transaction to edit.")
+
+    def _edit_transaction(self, transaction_id: int):
+        """Show edit dialog for a transaction."""
+        txn = TransactionOperations.get_by_id(transaction_id)
+        if txn:
+            dialog = AddTransactionDialog(self, txn)
+            if dialog.exec():
+                self._load_data()
+                self.status_label.setText("Transaction updated successfully")
+
+    def _delete_selected_transaction(self):
+        """Delete the currently selected transaction."""
+        txn_id = self.transaction_table.get_selected_transaction_id()
+        if txn_id:
+            self._delete_transaction(txn_id)
+        else:
+            QMessageBox.information(self, "Delete Transaction", "Please select a transaction to delete.")
+
+    def _delete_transaction(self, transaction_id: int):
+        """Delete a transaction after confirmation."""
+        txn = TransactionOperations.get_by_id(transaction_id)
+        if not txn:
+            return
+
+        reply = QMessageBox.question(
+            self, "Confirm Delete",
+            f"Are you sure you want to delete '{txn.description}' (${txn.amount:,.2f})?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            TransactionOperations.delete(transaction_id)
+            self._load_data()
+            self.status_label.setText("Transaction deleted")
+
     def _edit_current_item(self):
         """Edit the current item based on active tab."""
         current_tab = self.main_tabs.currentIndex()
-        if current_tab == 0:  # Assets tab
+        if current_tab == 1:  # Assets tab
             self._edit_selected_asset()
-        elif current_tab == 1:  # Liabilities tab
+        elif current_tab == 2:  # Liabilities tab
             self._edit_selected_liability()
-        elif current_tab == 2:  # Income tab
+        elif current_tab == 3:  # Income tab
             self._edit_selected_income()
-        elif current_tab == 3:  # Expenses tab
+        elif current_tab == 4:  # Expenses tab
             self._edit_selected_expense()
+        elif current_tab == 5:  # Transactions tab
+            self._edit_selected_transaction()
 
     def _delete_current_item(self):
         """Delete the current item based on active tab."""
         current_tab = self.main_tabs.currentIndex()
-        if current_tab == 0:  # Assets tab
+        if current_tab == 1:  # Assets tab
             self._delete_selected_asset()
-        elif current_tab == 1:  # Liabilities tab
+        elif current_tab == 2:  # Liabilities tab
             self._delete_selected_liability()
-        elif current_tab == 2:  # Income tab
+        elif current_tab == 3:  # Income tab
             self._delete_selected_income()
-        elif current_tab == 3:  # Expenses tab
+        elif current_tab == 4:  # Expenses tab
             self._delete_selected_expense()
+        elif current_tab == 5:  # Transactions tab
+            self._delete_selected_transaction()
 
     def _refresh_prices(self):
         """Trigger a manual price refresh."""

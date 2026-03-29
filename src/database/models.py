@@ -283,6 +283,97 @@ class Liability:
         return 0.0
 
 
+@dataclass
+class PaymentHistory:
+    """Represents a recorded loan payment."""
+    id: Optional[int] = None
+    liability_id: int = 0
+    payment_date: Optional[str] = None  # ISO date of the payment
+    payment_amount: float = 0.0  # Total payment applied
+    interest_portion: float = 0.0  # Interest part of the payment
+    principal_portion: float = 0.0  # Principal part of the payment
+    balance_before: float = 0.0  # Balance before payment
+    balance_after: float = 0.0  # Balance after payment
+    is_auto: bool = True  # True if auto-applied, False if manual
+    created_at: Optional[str] = None
+
+
+@dataclass
+class Transaction:
+    """Represents an imported bank/credit card transaction."""
+    id: Optional[int] = None
+    transaction_date: Optional[str] = None  # YYYY-MM-DD
+    description: str = ""  # Merchant/payee name
+    amount: float = 0.0  # Negative=debit, positive=credit
+    category: str = ""  # food, transportation, utilities, etc.
+    transaction_type: str = ""  # debit_card, direct_pay, zelle, bill_pay, atm, deposit, etc.
+    account_name: str = ""  # "SoFi Checking", "Chase Visa", etc.
+    original_description: str = ""  # Raw description from CSV
+    is_income: bool = False  # True if deposit/income
+    notes: str = ""
+    created_at: Optional[str] = None
+
+
+@dataclass
+class Goal:
+    """Represents a financial goal."""
+    id: Optional[int] = None
+    name: str = ""
+    goal_type: str = ""  # 'savings', 'debt_payoff', 'net_worth', 'asset_acquisition'
+    target_amount: float = 0.0
+    current_amount: float = 0.0
+    start_amount: float = 0.0  # Amount when goal was created, for progress calculation
+    target_date: Optional[str] = None
+    start_date: Optional[str] = None
+    is_active: bool = True
+    is_completed: bool = False
+    completed_date: Optional[str] = None
+    linked_liability_id: Optional[int] = None  # For debt_payoff goals
+    linked_asset_type: Optional[str] = None  # For savings/asset_acquisition goals
+    milestones: str = "[]"  # JSON string
+    notes: str = ""
+    created_at: Optional[str] = None
+    last_updated: Optional[str] = None
+
+    @property
+    def progress_percent(self) -> float:
+        """Calculate progress toward goal as percentage."""
+        if self.goal_type == 'debt_payoff':
+            if self.start_amount <= 0:
+                return 100.0
+            paid_off = self.start_amount - self.current_amount
+            return min(100.0, max(0.0, (paid_off / self.start_amount) * 100))
+        else:
+            if self.target_amount <= 0:
+                return 0.0
+            return min(100.0, max(0.0, (self.current_amount / self.target_amount) * 100))
+
+    @property
+    def amount_remaining(self) -> float:
+        """Calculate amount remaining to reach goal."""
+        if self.goal_type == 'debt_payoff':
+            return max(0, self.current_amount)
+        return max(0, self.target_amount - self.current_amount)
+
+    @property
+    def is_on_track(self) -> Optional[bool]:
+        """Check if goal is on track based on target date and linear progress."""
+        if not self.target_date or not self.start_date:
+            return None
+        try:
+            start = datetime.fromisoformat(self.start_date)
+            target = datetime.fromisoformat(self.target_date)
+            now = datetime.now()
+            total_days = (target - start).days
+            elapsed_days = (now - start).days
+            if total_days <= 0:
+                return None
+            expected_progress = (elapsed_days / total_days) * 100
+            return self.progress_percent >= expected_progress
+        except (ValueError, TypeError):
+            return None
+
+
 def get_connection() -> sqlite3.Connection:
     """Get a database connection."""
     conn = sqlite3.connect(DATABASE_PATH)
@@ -429,6 +520,85 @@ def init_database():
             key TEXT PRIMARY KEY,
             value TEXT
         )
+    """)
+
+    # Create goals table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            goal_type TEXT NOT NULL,
+            target_amount REAL NOT NULL DEFAULT 0,
+            current_amount REAL NOT NULL DEFAULT 0,
+            start_amount REAL NOT NULL DEFAULT 0,
+            target_date DATE,
+            start_date DATE,
+            is_active INTEGER DEFAULT 1,
+            is_completed INTEGER DEFAULT 0,
+            completed_date DATE,
+            linked_liability_id INTEGER,
+            linked_asset_type TEXT,
+            milestones TEXT DEFAULT '[]',
+            notes TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_updated DATETIME,
+            FOREIGN KEY (linked_liability_id) REFERENCES liabilities(id) ON DELETE SET NULL
+        )
+    """)
+
+    # Create transactions table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_date DATE NOT NULL,
+            description TEXT NOT NULL,
+            amount REAL NOT NULL DEFAULT 0,
+            category TEXT DEFAULT '',
+            transaction_type TEXT DEFAULT '',
+            account_name TEXT DEFAULT '',
+            original_description TEXT DEFAULT '',
+            is_income INTEGER DEFAULT 0,
+            notes TEXT DEFAULT '',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_transactions_date
+        ON transactions(transaction_date)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_transactions_account
+        ON transactions(account_name)
+    """)
+
+    # Create payment_history table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS payment_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            liability_id INTEGER NOT NULL,
+            payment_date DATE NOT NULL,
+            payment_amount REAL NOT NULL DEFAULT 0,
+            interest_portion REAL NOT NULL DEFAULT 0,
+            principal_portion REAL NOT NULL DEFAULT 0,
+            balance_before REAL NOT NULL DEFAULT 0,
+            balance_after REAL NOT NULL DEFAULT 0,
+            is_auto INTEGER DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (liability_id) REFERENCES liabilities(id) ON DELETE CASCADE
+        )
+    """)
+
+    # Create index for faster payment history lookups
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_payment_history_liability_id
+        ON payment_history(liability_id)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_payment_history_date
+        ON payment_history(payment_date)
     """)
 
     # Create index for faster price history lookups

@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush, QAction
 from ...database.models import Asset
+from ..theme import theme
 
 
 class AssetTableWidget(QWidget):
@@ -149,30 +150,31 @@ class AssetTableWidget(QWidget):
         # Gain/Loss (N/A for balance-only, unless retirement with tracking)
         has_retirement_tracking = (asset.asset_type == 'retirement' and
                                    asset.baseline_price > 0 and asset.purchase_price > 0)
+        p = theme().palette
         if asset.is_balance_only and not has_retirement_tracking:
             gl_item = QTableWidgetItem("N/A")
-            gl_item.setForeground(QBrush(QColor('#888888')))  # Gray
+            gl_item.setForeground(QBrush(QColor(p.text_disabled)))
         else:
             gl = asset.gain_loss
             gl_item = QTableWidgetItem(f"${gl:+,.2f}")
             if gl > 0:
-                gl_item.setForeground(QBrush(QColor('#2e7d32')))  # Green
+                gl_item.setForeground(QBrush(QColor(p.positive)))
             elif gl < 0:
-                gl_item.setForeground(QBrush(QColor('#c62828')))  # Red
+                gl_item.setForeground(QBrush(QColor(p.negative)))
         gl_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.table.setItem(row, 8, gl_item)
 
         # Gain/Loss % (N/A for balance-only, unless retirement with tracking)
         if asset.is_balance_only and not has_retirement_tracking:
             glp_item = QTableWidgetItem("N/A")
-            glp_item.setForeground(QBrush(QColor('#888888')))  # Gray
+            glp_item.setForeground(QBrush(QColor(p.text_disabled)))
         else:
             glp = asset.gain_loss_percent
             glp_item = QTableWidgetItem(f"{glp:+.2f}%")
             if glp > 0:
-                glp_item.setForeground(QBrush(QColor('#2e7d32')))  # Green
+                glp_item.setForeground(QBrush(QColor(p.positive)))
             elif glp < 0:
-                glp_item.setForeground(QBrush(QColor('#c62828')))  # Red
+                glp_item.setForeground(QBrush(QColor(p.negative)))
         glp_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.table.setItem(row, 9, glp_item)
 

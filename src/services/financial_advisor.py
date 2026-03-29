@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from ..database.models import Asset, Liability
-from ..database.operations import AssetOperations, LiabilityOperations
+from ..database.operations import AssetOperations, LiabilityOperations, TransactionOperations, ExpenseOperations
 
 
 @dataclass
@@ -556,7 +556,11 @@ class FinancialAdvisor:
         return liquid_assets
 
     def analyze_asset_liquidation_scenarios(self) -> List[Dict[str, Any]]:
-        """Analyze scenarios for selling assets to accelerate debt payoff."""
+        """Analyze scenarios for selling assets to accelerate debt payoff.
+
+        Includes both interest saved and the value of freed-up monthly payments
+        that could be invested over a 10-year period.
+        """
         scenarios = []
         liquid_assets = self.get_liquid_assets()
 
@@ -597,6 +601,14 @@ class FinancialAdvisor:
                     interest_saved += debt.total_interest_remaining * pct_paid * 0.8  # Conservative estimate
                     remaining = 0
 
+            # Calculate value of freed-up cashflow invested over 10 years
+            freed_cashflow_invested = self._calculate_freed_cashflow_invested(
+                net_proceeds, self.liabilities, years=10
+            )
+
+            # Total benefit = interest saved + freed cashflow invested
+            total_benefit = interest_saved + freed_cashflow_invested
+
             # Calculate new payoff timeline
             debt_remaining = total_debt - (net_proceeds - remaining)
             if debt_remaining > 0:
@@ -620,13 +632,17 @@ class FinancialAdvisor:
                 'net_proceeds': net_proceeds,
                 'debts_eliminated': debts_eliminated,
                 'interest_saved': interest_saved,
+                'freed_cashflow_invested': freed_cashflow_invested,
+                'total_benefit': total_benefit,
                 'months_saved': max(0, months_saved),
                 'remaining_debt': max(0, debt_remaining),
-                'recommendation': self._get_liquidation_recommendation(liquid_asset, interest_saved, debts_by_rate)
+                'recommendation': self._get_liquidation_recommendation(
+                    liquid_asset, interest_saved, freed_cashflow_invested, debts_by_rate
+                )
             })
 
-        # Sort by interest saved (best options first)
-        scenarios.sort(key=lambda x: x['interest_saved'], reverse=True)
+        # Sort by total benefit (interest saved + freed cashflow invested)
+        scenarios.sort(key=lambda x: x['total_benefit'], reverse=True)
         return scenarios
 
     def _estimate_payoff_months(self, balance: float, payment: float, monthly_rate: float) -> int:
@@ -640,24 +656,137 @@ class FinancialAdvisor:
             months += 1
         return months
 
+    def _calculate_freed_cashflow_invested(self, lump_sum: float, debts: List[Liability],
+                                            years: int = 10, investment_return: float = 0.07) -> float:
+        """Calculate value of freed-up monthly payments invested over time.
+
+        When debt is paid off early with a lump sum, the monthly payments are freed up
+        and could be invested. This calculates the future value of those freed payments.
+
+        Args:
+            lump_sum: Amount to apply to debt payoff (avalanche method)
+            debts: List of liabilities to pay off
+            years: Investment horizon in years (default 10)
+            investment_return: Annual investment return (default 7%)
+
+        Returns:
+            Total value of freed cashflow invested over the period
+        """
+        if not debts or lump_sum <= 0:
+            return 0.0
+
+        monthly_return = (1 + investment_return) ** (1/12) - 1
+        total_months = years * 12
+        max_sim_months = 600
+
+        # Calculate payoff month for each debt WITHOUT lump sum (baseline)
+        baseline_payoff_months = {}
+        balances_baseline = {d.id: d.current_balance for d in debts}
+
+        month = 0
+        while any(b > 0.01 for b in balances_baseline.values()) and month < max_sim_months:
+            month += 1
+            for d in debts:
+                if balances_baseline[d.id] > 0:
+                    interest = balances_baseline[d.id] * d.monthly_interest_rate
+                    balances_baseline[d.id] += interest
+                    pmt = min(d.monthly_payment, balances_baseline[d.id])
+                    balances_baseline[d.id] -= pmt
+                    if balances_baseline[d.id] <= 0.01 and d.id not in baseline_payoff_months:
+                        baseline_payoff_months[d.id] = month
+
+        for d in debts:
+            if d.id not in baseline_payoff_months:
+                baseline_payoff_months[d.id] = max_sim_months
+
+        # Calculate payoff month for each debt WITH lump sum (avalanche method)
+        lumpsum_payoff_months = {}
+        balances_payoff = {d.id: d.current_balance for d in debts}
+        remaining_lump = lump_sum
+
+        # Apply lump sum to debts in order of interest rate (highest first)
+        sorted_debts = sorted(debts, key=lambda x: x.interest_rate, reverse=True)
+        for d in sorted_debts:
+            if remaining_lump <= 0:
+                break
+            payoff_amount = min(remaining_lump, balances_payoff[d.id])
+            balances_payoff[d.id] -= payoff_amount
+            remaining_lump -= payoff_amount
+            if balances_payoff[d.id] <= 0.01:
+                lumpsum_payoff_months[d.id] = 0
+
+        # Simulate remaining payoff
+        month = 0
+        while any(b > 0.01 for b in balances_payoff.values()) and month < max_sim_months:
+            month += 1
+            for d in debts:
+                if balances_payoff[d.id] > 0:
+                    interest = balances_payoff[d.id] * d.monthly_interest_rate
+                    balances_payoff[d.id] += interest
+                    pmt = min(d.monthly_payment, balances_payoff[d.id])
+                    balances_payoff[d.id] -= pmt
+                    if balances_payoff[d.id] <= 0.01 and d.id not in lumpsum_payoff_months:
+                        lumpsum_payoff_months[d.id] = month
+
+        for d in debts:
+            if d.id not in lumpsum_payoff_months:
+                lumpsum_payoff_months[d.id] = max_sim_months
+
+        # Calculate value of freed cashflow invested
+        total_invested_value = 0.0
+
+        for month in range(1, total_months + 1):
+            freed_this_month = 0.0
+            for d in debts:
+                # If debt is paid off with lump sum but not yet without
+                if lumpsum_payoff_months[d.id] < month <= baseline_payoff_months[d.id]:
+                    freed_this_month += d.monthly_payment
+
+            if freed_this_month > 0:
+                months_to_grow = total_months - month
+                future_value = freed_this_month * ((1 + monthly_return) ** months_to_grow)
+                total_invested_value += future_value
+
+        return total_invested_value
+
     def _get_liquidation_recommendation(self, asset: Dict, interest_saved: float,
-                                         debts: List[Liability]) -> str:
-        """Generate recommendation for asset liquidation."""
+                                         freed_cashflow: float, debts: List[Liability]) -> str:
+        """Generate recommendation for asset liquidation.
+
+        Compares total debt payoff benefit (interest saved + freed cashflow invested)
+        against tax liability and potential investment returns.
+        """
         high_interest_debt = any(d.interest_rate > 15 for d in debts)
         is_at_loss = asset['is_at_loss']
         gain_loss_pct = asset['gain_loss_pct']
+        estimated_tax = asset['estimated_tax']
 
-        if high_interest_debt and interest_saved > asset['estimated_tax']:
+        # Total benefit of paying off debt = interest saved + value of freed cashflow invested
+        total_benefit = interest_saved + freed_cashflow
+
+        # Compare against investing the proceeds at 7% for 10 years
+        net_proceeds = asset['net_proceeds']
+        investment_value = net_proceeds * ((1 + 0.07) ** 10) if net_proceeds > 0 else 0
+        investment_growth = investment_value - net_proceeds
+
+        # If debt payoff benefit exceeds investment growth, favor debt payoff
+        favors_debt_payoff = total_benefit > investment_growth
+
+        if high_interest_debt and total_benefit > estimated_tax:
             if is_at_loss:
                 return "STRONGLY RECOMMENDED: Sell to eliminate high-interest debt. Loss can offset capital gains elsewhere."
-            elif interest_saved > asset['estimated_tax'] * 2:
-                return "RECOMMENDED: Interest savings significantly exceed tax liability."
+            elif favors_debt_payoff:
+                return f"RECOMMENDED: Debt payoff benefit (${total_benefit:,.0f}) exceeds expected investment growth."
+            elif total_benefit > estimated_tax * 2:
+                return "RECOMMENDED: Total benefit significantly exceeds tax liability."
             else:
-                return "CONSIDER: Interest savings exceed tax cost, but margin is modest."
+                return "CONSIDER: Benefits exceed tax cost, but investing may yield more."
         elif is_at_loss and high_interest_debt:
             return "CONSIDER: Tax-loss harvesting opportunity while eliminating debt."
         elif gain_loss_pct > 50:
             return "CAUTION: Large unrealized gain. Consider partial sale or holding."
+        elif favors_debt_payoff:
+            return f"CONSIDER: Debt payoff benefit (${total_benefit:,.0f}) exceeds investment growth."
         else:
             return "OPTIONAL: May help if you want to accelerate debt freedom."
 
@@ -717,3 +846,65 @@ class FinancialAdvisor:
         ]
 
         return result
+
+    # ==================== TRANSACTION SPENDING ANALYSIS ====================
+
+    def get_transaction_spending_analysis(self) -> Dict[str, Any]:
+        """Analyze actual spending from imported transactions vs budgeted expenses."""
+        spending_summary = TransactionOperations.get_spending_summary()
+        deposit_totals = TransactionOperations.get_deposit_totals()
+
+        if not spending_summary:
+            return {}
+
+        total_spending = abs(sum(d['total'] for d in spending_summary.values()))
+        total_count = sum(d['count'] for d in spending_summary.values())
+
+        # Get date range of transactions to calculate monthly average
+        all_txns = TransactionOperations.get_all(limit=10000)
+        if not all_txns:
+            return {}
+
+        dates = [t.transaction_date for t in all_txns if t.transaction_date]
+        if dates:
+            min_date = min(dates)
+            max_date = max(dates)
+            try:
+                d1 = datetime.strptime(min_date, '%Y-%m-%d')
+                d2 = datetime.strptime(max_date, '%Y-%m-%d')
+                days_span = max((d2 - d1).days, 1)
+                months_span = max(days_span / 30.44, 1)
+            except ValueError:
+                months_span = 1
+        else:
+            months_span = 1
+
+        actual_monthly_spending = total_spending / months_span
+
+        # Compare against budgeted monthly expenses
+        try:
+            expenses = ExpenseOperations.get_active()
+            budgeted_monthly = sum(e.monthly_amount for e in expenses)
+        except Exception:
+            budgeted_monthly = 0
+
+        # Top merchants by spending (exclude debt/transfers)
+        non_spending_cats = TransactionOperations.NON_SPENDING_CATEGORIES
+        merchant_totals = {}
+        for txn in all_txns:
+            if txn.amount < 0 and txn.category not in non_spending_cats:
+                desc = txn.description
+                merchant_totals[desc] = merchant_totals.get(desc, 0) + txn.amount
+        top_merchants = sorted(merchant_totals.items(), key=lambda x: x[1])[:15]
+
+        return {
+            'total_spending': total_spending,
+            'total_count': total_count,
+            'months_span': months_span,
+            'actual_monthly_spending': actual_monthly_spending,
+            'budgeted_monthly_expenses': budgeted_monthly,
+            'total_deposits': deposit_totals.get('total', 0),
+            'deposit_count': deposit_totals.get('count', 0),
+            'top_merchants': top_merchants,
+            'by_category': spending_summary,
+        }

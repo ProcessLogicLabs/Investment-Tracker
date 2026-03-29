@@ -11,6 +11,7 @@ from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from datetime import datetime
+from ..theme import theme
 
 
 class MplCanvas(FigureCanvas):
@@ -24,6 +25,20 @@ class MplCanvas(FigureCanvas):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(200, 150)
         self.updateGeometry()
+        self.apply_theme()
+
+    def apply_theme(self):
+        """Apply current theme colors to figure and axes."""
+        params = theme().get_matplotlib_params()
+        self.fig.set_facecolor(params['figure.facecolor'])
+        self.fig.set_edgecolor(params['figure.edgecolor'])
+        self.axes.set_facecolor(params['axes.facecolor'])
+        for spine in self.axes.spines.values():
+            spine.set_edgecolor(params['axes.edgecolor'])
+        self.axes.tick_params(colors=params['xtick.color'])
+        self.axes.xaxis.label.set_color(params['axes.labelcolor'])
+        self.axes.yaxis.label.set_color(params['axes.labelcolor'])
+        self.axes.title.set_color(params['text.color'])
 
     def resizeEvent(self, event):
         """Handle resize events to redraw the figure."""
@@ -47,6 +62,7 @@ class AllocationPieChart(QWidget):
     def update_chart(self, by_type: Dict[str, Dict[str, Any]]):
         """Update the pie chart with allocation data."""
         self.canvas.axes.clear()
+        self.canvas.apply_theme()
 
         if not by_type:
             self.canvas.axes.text(
@@ -110,6 +126,7 @@ class PerformanceBarChart(QWidget):
     def update_chart(self, assets: List[Any]):
         """Update the bar chart with asset performance data."""
         self.canvas.axes.clear()
+        self.canvas.apply_theme()
 
         if not assets:
             self.canvas.axes.text(
@@ -122,9 +139,10 @@ class PerformanceBarChart(QWidget):
         # Prepare data - show top 10 by absolute gain/loss
         sorted_assets = sorted(assets, key=lambda a: abs(a.gain_loss), reverse=True)[:10]
 
+        p = theme().palette
         names = [a.name[:15] + '...' if len(a.name) > 15 else a.name for a in sorted_assets]
         gains = [a.gain_loss_percent for a in sorted_assets]
-        colors = ['#2e7d32' if g >= 0 else '#c62828' for g in gains]
+        colors = [p.positive if g >= 0 else p.negative for g in gains]
 
         # Create horizontal bar chart
         y_pos = range(len(names))
@@ -133,7 +151,7 @@ class PerformanceBarChart(QWidget):
         self.canvas.axes.set_yticklabels(names)
         self.canvas.axes.set_xlabel('Gain/Loss %')
         self.canvas.axes.set_title('Asset Performance (Top 10)')
-        self.canvas.axes.axvline(x=0, color='black', linewidth=0.5)
+        self.canvas.axes.axvline(x=0, color=p.text_secondary, linewidth=0.5)
 
         self.canvas.fig.tight_layout()
         self.canvas.draw()
@@ -154,6 +172,7 @@ class ValueHistoryChart(QWidget):
     def update_chart(self, history: List[Dict[str, Any]]):
         """Update the line chart with historical data."""
         self.canvas.axes.clear()
+        self.canvas.apply_theme()
 
         if not history:
             self.canvas.axes.text(
@@ -166,8 +185,9 @@ class ValueHistoryChart(QWidget):
         dates = [h['date'] for h in history]
         values = [h['value'] for h in history]
 
-        self.canvas.axes.plot(dates, values, 'b-', linewidth=2, marker='o', markersize=4)
-        self.canvas.axes.fill_between(dates, values, alpha=0.3)
+        p = theme().palette
+        self.canvas.axes.plot(dates, values, color=p.accent, linewidth=2, marker='o', markersize=4)
+        self.canvas.axes.fill_between(dates, values, alpha=0.3, color=p.accent)
         self.canvas.axes.set_xlabel('Date')
         self.canvas.axes.set_ylabel('Portfolio Value ($)')
         self.canvas.axes.set_title('Portfolio Value History')
@@ -269,7 +289,7 @@ class SpotPriceHistoryChart(QWidget):
 
         # Status label
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #666; font-style: italic;")
+        self.status_label.setStyleSheet(f"color: {theme().palette.text_secondary}; font-style: italic;")
         layout.addWidget(self.status_label)
 
         # Chart canvas
@@ -332,6 +352,7 @@ class SpotPriceHistoryChart(QWidget):
         # Clear the figure completely to remove any secondary axes
         self.canvas.fig.clear()
         self.canvas.axes = self.canvas.fig.add_subplot(111)
+        self.canvas.apply_theme()
         self._secondary_axis = None
 
         if not self.historical_data:
@@ -436,6 +457,138 @@ class SpotPriceHistoryChart(QWidget):
         self.canvas.draw()
 
 
+class SpendingCategoryChart(QWidget):
+    """Pie chart showing spending breakdown by category."""
+
+    CATEGORY_COLORS = {
+        'food': '#FF6B6B',
+        'transportation': '#4ECDC4',
+        'utilities': '#45B7D1',
+        'personal': '#96CEB4',
+        'subscriptions': '#FFEAA7',
+        'debt': '#DFE6E9',
+        'housing': '#A29BFE',
+        'healthcare': '#FD79A8',
+        'entertainment': '#FDCB6E',
+        'cash': '#6C5CE7',
+        'retirement': '#00B894',
+        'transfers': '#B2BEC3',
+        'uncategorized': '#636E72',
+        'other': '#2D3436',
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.canvas = MplCanvas(self, width=5, height=4)
+        layout.addWidget(self.canvas)
+
+    def update_chart(self, spending_summary: Dict[str, Any]):
+        """Update the pie chart with spending-by-category data."""
+        self.canvas.axes.clear()
+        self.canvas.apply_theme()
+
+        if not spending_summary:
+            self.canvas.axes.text(
+                0.5, 0.5, 'No spending data\nImport transactions to see breakdown',
+                ha='center', va='center', transform=self.canvas.axes.transAxes,
+                fontsize=10
+            )
+            self.canvas.draw()
+            return
+
+        labels = []
+        sizes = []
+        colors = []
+
+        # Sort by absolute spending (most negative first)
+        sorted_cats = sorted(spending_summary.items(), key=lambda x: x[1]['total'])
+
+        for cat, data in sorted_cats:
+            total = abs(data['total'])
+            if total > 0:
+                labels.append(cat.title())
+                sizes.append(total)
+                colors.append(self.CATEGORY_COLORS.get(cat, '#636E72'))
+
+        if not sizes:
+            self.canvas.axes.text(
+                0.5, 0.5, 'No spending data',
+                ha='center', va='center', transform=self.canvas.axes.transAxes
+            )
+            self.canvas.draw()
+            return
+
+        wedges, texts, autotexts = self.canvas.axes.pie(
+            sizes,
+            labels=labels,
+            autopct='%1.1f%%',
+            colors=colors,
+            startangle=90,
+            pctdistance=0.8
+        )
+
+        for text in autotexts:
+            text.set_fontsize(8)
+
+        self.canvas.axes.set_title('Spending by Category')
+        self.canvas.fig.tight_layout()
+        self.canvas.draw()
+
+
+class SpendingBarChart(QWidget):
+    """Horizontal bar chart showing spending amounts by category."""
+
+    CATEGORY_COLORS = SpendingCategoryChart.CATEGORY_COLORS
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.canvas = MplCanvas(self, width=7, height=5)
+        layout.addWidget(self.canvas)
+
+    def update_chart(self, spending_summary: Dict[str, Any]):
+        """Update the bar chart with spending-by-category data."""
+        self.canvas.axes.clear()
+        self.canvas.apply_theme()
+
+        if not spending_summary:
+            self.canvas.axes.text(
+                0.5, 0.5, 'No spending data\nImport transactions to see breakdown',
+                ha='center', va='center', transform=self.canvas.axes.transAxes,
+                fontsize=10
+            )
+            self.canvas.draw()
+            return
+
+        # Sort by spending amount (most negative = most spent)
+        sorted_cats = sorted(spending_summary.items(), key=lambda x: x[1]['total'])
+        categories = [cat.title() for cat, _ in sorted_cats]
+        amounts = [abs(data['total']) for _, data in sorted_cats]
+        colors = [self.CATEGORY_COLORS.get(cat, '#636E72') for cat, _ in sorted_cats]
+
+        y_pos = range(len(categories))
+        self.canvas.axes.barh(y_pos, amounts, color=colors)
+        self.canvas.axes.set_yticks(y_pos)
+        self.canvas.axes.set_yticklabels(categories)
+        self.canvas.axes.set_xlabel('Amount ($)')
+        self.canvas.axes.set_title('Spending by Category')
+
+        # Add value labels on bars
+        for i, (amount, cat) in enumerate(zip(amounts, categories)):
+            self.canvas.axes.text(amount + max(amounts) * 0.01, i,
+                                f'${amount:,.0f}', va='center', fontsize=8)
+
+        self.canvas.fig.tight_layout()
+        self.canvas.draw()
+
+
 class ChartWidget(QWidget):
     """Tabbed widget containing all charts."""
 
@@ -471,6 +624,13 @@ class ChartWidget(QWidget):
         self.allocation_chart.update_chart(summary.get('by_type', {}))
         self.performance_chart.update_chart(assets)
         self.history_chart.update_chart(history)
+
+    def apply_theme(self):
+        """Re-apply theme to all chart canvases."""
+        self.allocation_chart.canvas.apply_theme()
+        self.performance_chart.canvas.apply_theme()
+        self.history_chart.canvas.apply_theme()
+        self.spot_price_chart.canvas.apply_theme()
 
     def refresh_spot_prices(self):
         """Trigger a refresh of spot price history."""

@@ -3,7 +3,7 @@
 import sqlite3
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from .models import Asset, PriceHistory, Liability, Income, Expense, get_connection
+from .models import Asset, PriceHistory, Liability, Income, Expense, Goal, PaymentHistory, Transaction, get_connection
 
 
 class AssetOperations:
@@ -1010,3 +1010,805 @@ class ExpenseOperations:
             'discretionary_monthly': discretionary_monthly,
             'by_type': by_type
         }
+
+
+class GoalOperations:
+    """CRUD operations for financial goals."""
+
+    @staticmethod
+    def _row_to_goal(row) -> Goal:
+        """Convert a database row to a Goal object."""
+        return Goal(
+            id=row['id'],
+            name=row['name'],
+            goal_type=row['goal_type'],
+            target_amount=row['target_amount'],
+            current_amount=row['current_amount'],
+            start_amount=row['start_amount'],
+            target_date=row['target_date'],
+            start_date=row['start_date'],
+            is_active=bool(row['is_active']),
+            is_completed=bool(row['is_completed']),
+            completed_date=row['completed_date'],
+            linked_liability_id=row['linked_liability_id'],
+            linked_asset_type=row['linked_asset_type'],
+            milestones=row['milestones'] or '[]',
+            notes=row['notes'],
+            created_at=row['created_at'],
+            last_updated=row['last_updated']
+        )
+
+    @staticmethod
+    def create(goal: Goal) -> int:
+        """Create a new goal and return its ID."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        now = datetime.now().isoformat()
+
+        cursor.execute("""
+            INSERT INTO goals (name, goal_type, target_amount, current_amount, start_amount,
+                              target_date, start_date, is_active, is_completed, completed_date,
+                              linked_liability_id, linked_asset_type, milestones, notes, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            goal.name,
+            goal.goal_type,
+            goal.target_amount,
+            goal.current_amount,
+            goal.start_amount,
+            goal.target_date,
+            goal.start_date,
+            1 if goal.is_active else 0,
+            1 if goal.is_completed else 0,
+            goal.completed_date,
+            goal.linked_liability_id,
+            goal.linked_asset_type,
+            goal.milestones,
+            goal.notes,
+            now
+        ))
+
+        goal_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return goal_id
+
+    @staticmethod
+    def get_by_id(goal_id: int) -> Optional[Goal]:
+        """Get a goal by its ID."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM goals WHERE id = ?", (goal_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            return GoalOperations._row_to_goal(row)
+        return None
+
+    @staticmethod
+    def get_all() -> List[Goal]:
+        """Get all goals."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM goals ORDER BY is_completed, goal_type, name")
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [GoalOperations._row_to_goal(row) for row in rows]
+
+    @staticmethod
+    def get_active() -> List[Goal]:
+        """Get all active (non-completed) goals."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM goals WHERE is_active = 1 AND is_completed = 0 ORDER BY goal_type, name")
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [GoalOperations._row_to_goal(row) for row in rows]
+
+    @staticmethod
+    def update(goal: Goal) -> bool:
+        """Update an existing goal."""
+        if goal.id is None:
+            return False
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        now = datetime.now().isoformat()
+
+        cursor.execute("""
+            UPDATE goals SET
+                name = ?,
+                goal_type = ?,
+                target_amount = ?,
+                current_amount = ?,
+                start_amount = ?,
+                target_date = ?,
+                start_date = ?,
+                is_active = ?,
+                is_completed = ?,
+                completed_date = ?,
+                linked_liability_id = ?,
+                linked_asset_type = ?,
+                milestones = ?,
+                notes = ?,
+                last_updated = ?
+            WHERE id = ?
+        """, (
+            goal.name,
+            goal.goal_type,
+            goal.target_amount,
+            goal.current_amount,
+            goal.start_amount,
+            goal.target_date,
+            goal.start_date,
+            1 if goal.is_active else 0,
+            1 if goal.is_completed else 0,
+            goal.completed_date,
+            goal.linked_liability_id,
+            goal.linked_asset_type,
+            goal.milestones,
+            goal.notes,
+            now,
+            goal.id
+        ))
+
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    @staticmethod
+    def delete(goal_id: int) -> bool:
+        """Delete a goal."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
+
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    @staticmethod
+    def refresh_all_goal_progress():
+        """Recalculate progress for all active goals from live data."""
+        import json
+
+        goals = GoalOperations.get_active()
+        if not goals:
+            return
+
+        for goal in goals:
+            new_amount = goal.current_amount
+            now = datetime.now().isoformat()
+
+            if goal.goal_type == 'debt_payoff' and goal.linked_liability_id:
+                liability = LiabilityOperations.get_by_id(goal.linked_liability_id)
+                if liability:
+                    new_amount = liability.current_balance
+
+            elif goal.goal_type == 'net_worth':
+                total_assets = sum(a.current_value for a in AssetOperations.get_all())
+                total_liabilities = LiabilityOperations.get_total_liabilities()
+                new_amount = total_assets - total_liabilities
+
+            elif goal.goal_type in ('savings', 'asset_acquisition') and goal.linked_asset_type:
+                assets = AssetOperations.get_by_type(goal.linked_asset_type)
+                new_amount = sum(a.current_value for a in assets)
+
+            if new_amount != goal.current_amount:
+                # Update milestones
+                milestones = json.loads(goal.milestones or '[]')
+                for ms in milestones:
+                    if not ms.get('reached'):
+                        ms_amount = ms.get('amount', float('inf'))
+                        if goal.goal_type == 'debt_payoff':
+                            paid = goal.start_amount - new_amount
+                            target_paid = goal.start_amount * (ms_amount / goal.start_amount) if goal.start_amount > 0 else 0
+                            if paid >= target_paid:
+                                ms['reached'] = True
+                                ms['date'] = now
+                        else:
+                            if new_amount >= ms_amount:
+                                ms['reached'] = True
+                                ms['date'] = now
+
+                # Check completion
+                is_completed = False
+                if goal.goal_type == 'debt_payoff':
+                    is_completed = new_amount <= 0
+                else:
+                    is_completed = new_amount >= goal.target_amount
+
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE goals SET current_amount = ?, milestones = ?,
+                        is_completed = ?, completed_date = ?, last_updated = ?
+                    WHERE id = ?
+                """, (
+                    new_amount, json.dumps(milestones),
+                    1 if is_completed else 0,
+                    now if is_completed and not goal.is_completed else goal.completed_date,
+                    now, goal.id
+                ))
+                conn.commit()
+                conn.close()
+
+
+class PaymentOperations:
+    """Operations for recording and applying loan payments."""
+
+    @staticmethod
+    def _row_to_payment(row) -> PaymentHistory:
+        """Convert a database row to a PaymentHistory object."""
+        return PaymentHistory(
+            id=row['id'],
+            liability_id=row['liability_id'],
+            payment_date=row['payment_date'],
+            payment_amount=row['payment_amount'],
+            interest_portion=row['interest_portion'],
+            principal_portion=row['principal_portion'],
+            balance_before=row['balance_before'],
+            balance_after=row['balance_after'],
+            is_auto=bool(row['is_auto']),
+            created_at=row['created_at']
+        )
+
+    @staticmethod
+    def record_payment(payment: PaymentHistory) -> int:
+        """Record a payment and return its ID."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO payment_history (liability_id, payment_date, payment_amount,
+                                        interest_portion, principal_portion,
+                                        balance_before, balance_after, is_auto)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            payment.liability_id,
+            payment.payment_date,
+            payment.payment_amount,
+            payment.interest_portion,
+            payment.principal_portion,
+            payment.balance_before,
+            payment.balance_after,
+            1 if payment.is_auto else 0
+        ))
+
+        payment_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return payment_id
+
+    @staticmethod
+    def get_by_liability(liability_id: int, limit: int = 100) -> List[PaymentHistory]:
+        """Get payment history for a liability, most recent first."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM payment_history
+            WHERE liability_id = ?
+            ORDER BY payment_date DESC
+            LIMIT ?
+        """, (liability_id, limit))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [PaymentOperations._row_to_payment(row) for row in rows]
+
+    @staticmethod
+    def has_payment_for_month(liability_id: int, year: int, month: int) -> bool:
+        """Check if a payment has already been recorded for a given month."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        date_prefix = f"{year:04d}-{month:02d}"
+        cursor.execute("""
+            SELECT COUNT(*) as cnt FROM payment_history
+            WHERE liability_id = ? AND payment_date LIKE ?
+        """, (liability_id, f"{date_prefix}%"))
+
+        row = cursor.fetchone()
+        conn.close()
+        return row['cnt'] > 0
+
+    @staticmethod
+    def apply_monthly_payments() -> List[Dict[str, Any]]:
+        """Apply monthly payments to all active liabilities for any due months.
+
+        Checks each liability and applies payments for months between the last
+        recorded payment and the current month. Returns a list of applied payments.
+        """
+        results = []
+        liabilities = LiabilityOperations.get_all()
+        now = datetime.now()
+        current_year = now.year
+        current_month = now.month
+
+        for liability in liabilities:
+            if liability.current_balance <= 0 or liability.monthly_payment <= 0:
+                continue
+
+            # Find the last payment date for this liability
+            last_payments = PaymentOperations.get_by_liability(liability.id, limit=1)
+            if last_payments:
+                try:
+                    last_date = datetime.fromisoformat(last_payments[0].payment_date)
+                    start_year = last_date.year
+                    start_month = last_date.month
+                    # Start from the month AFTER the last payment
+                    start_month += 1
+                    if start_month > 12:
+                        start_month = 1
+                        start_year += 1
+                except (ValueError, TypeError):
+                    # If we can't parse, start from current month
+                    start_year = current_year
+                    start_month = current_month
+            else:
+                # No previous payments - only apply for current month
+                start_year = current_year
+                start_month = current_month
+
+            # Apply payments for each due month up to and including current
+            year, month = start_year, start_month
+            balance = liability.current_balance
+
+            while (year < current_year or (year == current_year and month <= current_month)):
+                if balance <= 0:
+                    break
+
+                # Calculate interest on current balance
+                interest = balance * liability.monthly_interest_rate
+                payment = min(liability.monthly_payment, balance + interest)
+                principal = payment - interest
+                if principal < 0:
+                    principal = 0
+                new_balance = max(0, balance - principal)
+
+                payment_date = f"{year:04d}-{month:02d}-{liability.payment_day:02d}"
+
+                record = PaymentHistory(
+                    liability_id=liability.id,
+                    payment_date=payment_date,
+                    payment_amount=round(payment, 2),
+                    interest_portion=round(interest, 2),
+                    principal_portion=round(principal, 2),
+                    balance_before=round(balance, 2),
+                    balance_after=round(new_balance, 2),
+                    is_auto=True
+                )
+                PaymentOperations.record_payment(record)
+
+                results.append({
+                    'liability': liability.name,
+                    'date': payment_date,
+                    'payment': round(payment, 2),
+                    'interest': round(interest, 2),
+                    'principal': round(principal, 2),
+                    'balance_after': round(new_balance, 2)
+                })
+
+                balance = new_balance
+
+                # Advance to next month
+                month += 1
+                if month > 12:
+                    month = 1
+                    year += 1
+
+            # Update the liability balance if payments were applied
+            if balance != liability.current_balance:
+                LiabilityOperations.update_balance(liability.id, round(balance, 2))
+
+        return results
+
+    @staticmethod
+    def get_all_history(limit: int = 200) -> List[PaymentHistory]:
+        """Get all payment history across all liabilities."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM payment_history
+            ORDER BY payment_date DESC
+            LIMIT ?
+        """, (limit,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [PaymentOperations._row_to_payment(row) for row in rows]
+
+
+class TransactionOperations:
+    """CRUD operations for imported transactions."""
+
+    @staticmethod
+    def _row_to_transaction(row) -> Transaction:
+        """Convert a database row to a Transaction object."""
+        return Transaction(
+            id=row['id'],
+            transaction_date=row['transaction_date'],
+            description=row['description'],
+            amount=row['amount'],
+            category=row['category'],
+            transaction_type=row['transaction_type'],
+            account_name=row['account_name'],
+            original_description=row['original_description'],
+            is_income=bool(row['is_income']),
+            notes=row['notes'],
+            created_at=row['created_at']
+        )
+
+    @staticmethod
+    def create(transaction: Transaction) -> int:
+        """Create a new transaction and return its ID."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO transactions (transaction_date, description, amount, category,
+                                     transaction_type, account_name, original_description,
+                                     is_income, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            transaction.transaction_date,
+            transaction.description,
+            transaction.amount,
+            transaction.category,
+            transaction.transaction_type,
+            transaction.account_name,
+            transaction.original_description,
+            1 if transaction.is_income else 0,
+            transaction.notes
+        ))
+
+        txn_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return txn_id
+
+    @staticmethod
+    def create_bulk(transactions: List[Transaction]) -> int:
+        """Bulk insert transactions. Returns count of inserted rows."""
+        if not transactions:
+            return 0
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        rows = [
+            (t.transaction_date, t.description, t.amount, t.category,
+             t.transaction_type, t.account_name, t.original_description,
+             1 if t.is_income else 0, t.notes)
+            for t in transactions
+        ]
+
+        cursor.executemany("""
+            INSERT INTO transactions (transaction_date, description, amount, category,
+                                     transaction_type, account_name, original_description,
+                                     is_income, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, rows)
+
+        count = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return count
+
+    @staticmethod
+    def get_by_id(transaction_id: int) -> Optional[Transaction]:
+        """Get a transaction by its ID."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM transactions WHERE id = ?", (transaction_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            return TransactionOperations._row_to_transaction(row)
+        return None
+
+    @staticmethod
+    def get_all(limit: int = 500) -> List[Transaction]:
+        """Get all transactions, most recent first."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM transactions
+            ORDER BY transaction_date DESC, id DESC
+            LIMIT ?
+        """, (limit,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [TransactionOperations._row_to_transaction(row) for row in rows]
+
+    @staticmethod
+    def get_by_date_range(start_date: str, end_date: str) -> List[Transaction]:
+        """Get transactions within a date range."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM transactions
+            WHERE transaction_date BETWEEN ? AND ?
+            ORDER BY transaction_date DESC, id DESC
+        """, (start_date, end_date))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [TransactionOperations._row_to_transaction(row) for row in rows]
+
+    @staticmethod
+    def get_by_category(category: str) -> List[Transaction]:
+        """Get all transactions of a specific category."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM transactions
+            WHERE category = ?
+            ORDER BY transaction_date DESC
+        """, (category,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [TransactionOperations._row_to_transaction(row) for row in rows]
+
+    @staticmethod
+    def get_by_account(account_name: str) -> List[Transaction]:
+        """Get all transactions for an account."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT * FROM transactions
+            WHERE account_name = ?
+            ORDER BY transaction_date DESC
+        """, (account_name,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [TransactionOperations._row_to_transaction(row) for row in rows]
+
+    @staticmethod
+    def get_accounts() -> List[str]:
+        """Get distinct account names."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT DISTINCT account_name FROM transactions ORDER BY account_name")
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [row['account_name'] for row in rows]
+
+    @staticmethod
+    def get_categories() -> List[str]:
+        """Get distinct categories."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT DISTINCT category FROM transactions WHERE category != '' ORDER BY category")
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [row['category'] for row in rows]
+
+    @staticmethod
+    def update(transaction: Transaction) -> bool:
+        """Update an existing transaction."""
+        if transaction.id is None:
+            return False
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE transactions SET
+                transaction_date = ?,
+                description = ?,
+                amount = ?,
+                category = ?,
+                transaction_type = ?,
+                account_name = ?,
+                original_description = ?,
+                is_income = ?,
+                notes = ?
+            WHERE id = ?
+        """, (
+            transaction.transaction_date,
+            transaction.description,
+            transaction.amount,
+            transaction.category,
+            transaction.transaction_type,
+            transaction.account_name,
+            transaction.original_description,
+            1 if transaction.is_income else 0,
+            transaction.notes,
+            transaction.id
+        ))
+
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    @staticmethod
+    def delete(transaction_id: int) -> bool:
+        """Delete a transaction."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
+
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    @staticmethod
+    def exists(date: str, amount: float, description: str) -> bool:
+        """Check if a transaction already exists (for duplicate detection)."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT COUNT(*) as cnt FROM transactions
+            WHERE transaction_date = ? AND amount = ? AND original_description = ?
+        """, (date, amount, description))
+
+        row = cursor.fetchone()
+        conn.close()
+        return row['cnt'] > 0
+
+    # Categories that are not discretionary spending
+    NON_SPENDING_CATEGORIES = {'debt', 'transfers', 'income', 'retirement'}
+
+    @staticmethod
+    def get_spending_summary(include_non_spending: bool = False) -> Dict[str, Any]:
+        """Get spending summary by category.
+
+        By default excludes debt payments, transfers, income, and retirement
+        contributions since those aren't discretionary spending.
+        """
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        if include_non_spending:
+            cursor.execute("""
+                SELECT category,
+                       COUNT(*) as count,
+                       SUM(amount) as total,
+                       AVG(amount) as avg_amount
+                FROM transactions
+                WHERE amount < 0
+                GROUP BY category
+                ORDER BY total ASC
+            """)
+        else:
+            placeholders = ','.join('?' for _ in TransactionOperations.NON_SPENDING_CATEGORIES)
+            cursor.execute(f"""
+                SELECT category,
+                       COUNT(*) as count,
+                       SUM(amount) as total,
+                       AVG(amount) as avg_amount
+                FROM transactions
+                WHERE amount < 0
+                  AND category NOT IN ({placeholders})
+                GROUP BY category
+                ORDER BY total ASC
+            """, tuple(TransactionOperations.NON_SPENDING_CATEGORIES))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        by_category = {}
+        for row in rows:
+            cat = row['category'] or 'uncategorized'
+            by_category[cat] = {
+                'count': row['count'],
+                'total': row['total'],
+                'avg': row['avg_amount']
+            }
+
+        return by_category
+
+    @staticmethod
+    def get_non_spending_summary() -> Dict[str, Any]:
+        """Get summary of debt payments, transfers, etc. (non-spending outflows)."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        placeholders = ','.join('?' for _ in TransactionOperations.NON_SPENDING_CATEGORIES)
+        cursor.execute(f"""
+            SELECT category,
+                   COUNT(*) as count,
+                   SUM(amount) as total,
+                   AVG(amount) as avg_amount
+            FROM transactions
+            WHERE amount < 0
+              AND category IN ({placeholders})
+            GROUP BY category
+            ORDER BY total ASC
+        """, tuple(TransactionOperations.NON_SPENDING_CATEGORIES))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        by_category = {}
+        for row in rows:
+            cat = row['category'] or 'uncategorized'
+            by_category[cat] = {
+                'count': row['count'],
+                'total': row['total'],
+                'avg': row['avg_amount']
+            }
+
+        return by_category
+
+    @staticmethod
+    def recategorize_all():
+        """Re-run auto-categorization on all transactions."""
+        from ..utils.csv_importer import auto_categorize
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT id, description, original_description, transaction_type, amount FROM transactions")
+        rows = cursor.fetchall()
+
+        for row in rows:
+            desc = row['original_description'] or row['description']
+            txn_type = row['transaction_type'] or ''
+            new_category = auto_categorize(desc, txn_type)
+            is_income = row['amount'] > 0
+            cursor.execute(
+                "UPDATE transactions SET category = ?, is_income = ? WHERE id = ?",
+                (new_category, is_income, row['id'])
+            )
+
+        conn.commit()
+        conn.close()
+        return len(rows)
+
+    @staticmethod
+    def get_deposit_totals() -> Dict[str, Any]:
+        """Get total income deposits (excludes debt repayments and transfers in)."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT COUNT(*) as count,
+                   COALESCE(SUM(amount), 0) as total
+            FROM transactions
+            WHERE amount > 0
+              AND category = 'income'
+        """)
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row and row['count'] > 0:
+            return {'count': row['count'], 'total': row['total']}
+        return {}

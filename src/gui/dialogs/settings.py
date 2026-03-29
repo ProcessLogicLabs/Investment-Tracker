@@ -2,9 +2,10 @@
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QSpinBox, QCheckBox, QPushButton, QGroupBox, QLabel
+    QSpinBox, QCheckBox, QPushButton, QGroupBox, QLabel, QComboBox
 )
 from ...database.operations import SettingsOperations
+from ..theme import ThemeManager, theme, Typography
 
 
 class SettingsDialog(QDialog):
@@ -54,6 +55,12 @@ class SettingsDialog(QDialog):
         self.confirm_delete_check.setChecked(True)
         display_layout.addRow("Confirm before delete:", self.confirm_delete_check)
 
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("Auto (System)", "auto")
+        self.theme_combo.addItem("Light", "light")
+        self.theme_combo.addItem("Dark", "dark")
+        display_layout.addRow("Theme:", self.theme_combo)
+
         layout.addWidget(display_group)
 
         # Info label
@@ -62,7 +69,8 @@ class SettingsDialog(QDialog):
             "Real estate values must be entered manually."
         )
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #666; font-size: 10px;")
+        p = theme().palette
+        info_label.setStyleSheet(f"color: {p.text_secondary}; font-size: {Typography.CAPTION_SIZE}pt;")
         layout.addWidget(info_label)
 
         layout.addStretch()
@@ -100,6 +108,12 @@ class SettingsDialog(QDialog):
             SettingsOperations.get('confirm_delete', 'true') == 'true'
         )
 
+        theme_mode = SettingsOperations.get('theme_mode', 'auto')
+        for i in range(self.theme_combo.count()):
+            if self.theme_combo.itemData(i) == theme_mode:
+                self.theme_combo.setCurrentIndex(i)
+                break
+
     def _save(self):
         """Save settings to database."""
         SettingsOperations.set(
@@ -122,6 +136,10 @@ class SettingsDialog(QDialog):
             'confirm_delete',
             'true' if self.confirm_delete_check.isChecked() else 'false'
         )
+
+        # Apply theme change
+        new_mode = self.theme_combo.currentData()
+        ThemeManager.instance().set_mode(new_mode)
 
         self.accept()
 

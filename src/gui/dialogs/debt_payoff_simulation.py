@@ -15,6 +15,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QBrush
 from PyQt6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QScatterSeries, QAreaSeries
 from ...database.operations import AssetOperations, LiabilityOperations, IncomeOperations, SettingsOperations
+from ..theme import theme, Typography
 import json
 
 
@@ -806,7 +807,7 @@ class TaxSettingsPage(QWizardPage):
 
         # Slider value label
         self.slider_value_label = QLabel("$0")
-        self.slider_value_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #0066cc;")
+        self.slider_value_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {theme().palette.accent};")
         self.slider_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         slider_layout.addWidget(self.slider_value_label)
 
@@ -937,7 +938,7 @@ class TaxSettingsPage(QWizardPage):
         goal_layout.setContentsMargins(8, 12, 8, 8)
 
         self.goal_value_label = QLabel("No Goal Set")
-        self.goal_value_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #006600;")
+        self.goal_value_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {theme().palette.positive};")
         self.goal_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         goal_layout.addWidget(self.goal_value_label)
 
@@ -1009,13 +1010,13 @@ class TaxSettingsPage(QWizardPage):
         row += 1
         results_grid.addWidget(QLabel("Cash Reduction:"), row, 0)
         self.monthly_reduction_label = QLabel("$0")
-        self.monthly_reduction_label.setStyleSheet("color: #cc6600;")
+        self.monthly_reduction_label.setStyleSheet(f"color: {theme().palette.warning};")
         results_grid.addWidget(self.monthly_reduction_label, row, 1)
 
         row += 1
         results_grid.addWidget(QLabel("E-Fund Alloc:"), row, 0)
         self.efund_allocation_label = QLabel("$0")
-        self.efund_allocation_label.setStyleSheet("font-weight: bold; color: #006699;")
+        self.efund_allocation_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.accent};")
         results_grid.addWidget(self.efund_allocation_label, row, 1)
 
         # Separator
@@ -1028,14 +1029,14 @@ class TaxSettingsPage(QWizardPage):
         row += 1
         results_grid.addWidget(QLabel("401k (10yr):"), row, 0)
         self.projection_401k_label = QLabel("$0")
-        self.projection_401k_label.setStyleSheet("font-weight: bold; color: #006600;")
+        self.projection_401k_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.positive};")
         self.projection_401k_label.setToolTip("Projected 401k value in 10 years (7% return)")
         results_grid.addWidget(self.projection_401k_label, row, 1)
 
         row += 1
         results_grid.addWidget(QLabel("401k (20yr):"), row, 0)
         self.projection_401k_20y_label = QLabel("$0")
-        self.projection_401k_20y_label.setStyleSheet("font-weight: bold; color: #006600;")
+        self.projection_401k_20y_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.positive};")
         self.projection_401k_20y_label.setToolTip("Projected 401k value in 20 years (7% return)")
         results_grid.addWidget(self.projection_401k_20y_label, row, 1)
 
@@ -1095,7 +1096,7 @@ class TaxSettingsPage(QWizardPage):
         row += 1
         results_grid.addWidget(QLabel("Price Change:"), row, 0)
         self.silver_change_label = QLabel("0%")
-        self.silver_change_label.setStyleSheet("font-weight: bold; color: #0066cc;")
+        self.silver_change_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.accent};")
         results_grid.addWidget(self.silver_change_label, row, 1)
 
         row += 1
@@ -1160,16 +1161,27 @@ class TaxSettingsPage(QWizardPage):
         row += 1
         results_grid.addWidget(QLabel("Invest (10yr):"), row, 0)
         self.invest_10y_label = QLabel("N/A")
-        self.invest_10y_label.setStyleSheet("font-weight: bold; color: #0066cc;")
+        self.invest_10y_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.accent};")
         self.invest_10y_label.setToolTip("Value if proceeds invested at 7% for 10 years")
         results_grid.addWidget(self.invest_10y_label, row, 1)
 
         row += 1
         results_grid.addWidget(QLabel("Debt Interest:"), row, 0)
         self.debt_interest_label = QLabel("N/A")
-        self.debt_interest_label.setStyleSheet("font-weight: bold; color: #cc0000;")
-        self.debt_interest_label.setToolTip("Total interest paid on debt over same period")
+        self.debt_interest_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.negative};")
+        self.debt_interest_label.setToolTip("Interest saved by paying off debt with lump sum")
         results_grid.addWidget(self.debt_interest_label, row, 1)
+
+        row += 1
+        results_grid.addWidget(QLabel("Cashflow Invested:"), row, 0)
+        self.cashflow_invested_label = QLabel("N/A")
+        self.cashflow_invested_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.positive};")
+        self.cashflow_invested_label.setToolTip(
+            "Value of freed-up monthly payments invested over 10 years.\n"
+            "When debt is paid off, the monthly payment is freed up\n"
+            "and could be invested for the remaining period."
+        )
+        results_grid.addWidget(self.cashflow_invested_label, row, 1)
 
         row += 1
         results_grid.addWidget(QLabel("Net Difference:"), row, 0)
@@ -1205,16 +1217,37 @@ class TaxSettingsPage(QWizardPage):
         chart_header.setSpacing(8)
 
         self.chart_type_combo = QComboBox()
-        self.chart_type_combo.addItem("Tax Trade-off", "tradeoff")
+        self.chart_type_combo.addItem("Invest vs Pay Debt", "projection")
         self.chart_type_combo.addItem("Debt Waterfall", "waterfall")
+        self.chart_type_combo.addItem("Investment Growth", "investment")
         self.chart_type_combo.setToolTip("Switch between chart views")
         self.chart_type_combo.currentIndexChanged.connect(self._on_chart_type_changed)
         chart_header.addWidget(self.chart_type_combo)
 
-        self.chart_label = QLabel("Tax vs Debt Payoff Trade-off")
+        self.chart_label = QLabel("10-Year Strategy Comparison")
         self.chart_label.setStyleSheet("font-weight: bold; font-size: 12px;")
         self.chart_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         chart_header.addWidget(self.chart_label, 1)
+
+        # Fullscreen button
+        self.fullscreen_btn = QPushButton("⛶")
+        self.fullscreen_btn.setFixedSize(28, 28)
+        self.fullscreen_btn.setToolTip("View chart fullscreen")
+        p = theme().palette
+        self.fullscreen_btn.setStyleSheet(f"""
+            QPushButton {{
+                font-size: 16px;
+                border: 1px solid {p.border};
+                border-radius: 4px;
+                background: {p.surface};
+            }}
+            QPushButton:hover {{
+                background: {p.surface_alt};
+                border-color: {p.muted};
+            }}
+        """)
+        self.fullscreen_btn.clicked.connect(self._show_fullscreen_chart)
+        chart_header.addWidget(self.fullscreen_btn)
 
         right_layout.addLayout(chart_header)
 
@@ -1222,28 +1255,21 @@ class TaxSettingsPage(QWizardPage):
         self._setup_chart()
         right_layout.addWidget(self.chart_view, 1)
 
-        # Trade-off legend
-        self.tradeoff_legend = QWidget()
-        legend_layout = QHBoxLayout(self.tradeoff_legend)
+        # Projection legend
+        self.projection_legend = QWidget()
+        legend_layout = QHBoxLayout(self.projection_legend)
         legend_layout.setContentsMargins(0, 0, 0, 0)
-        legend_layout.setSpacing(8)
-        tax_legend = QLabel("● Tax")
-        tax_legend.setStyleSheet("color: #cc0000; font-size: 10px;")
-        months_legend = QLabel("● Months")
-        months_legend.setStyleSheet("color: #0066cc; font-size: 10px;")
-        cashflow_legend = QLabel("● Cash Flow")
-        cashflow_legend.setStyleSheet("color: #cc6600; font-size: 10px;")
-        networth_legend = QLabel("● Net Worth")
-        networth_legend.setStyleSheet("color: #9933cc; font-size: 10px;")
-        marker_legend = QLabel("◆ Current")
-        marker_legend.setStyleSheet("color: #00cc00; font-size: 10px;")
-        legend_layout.addWidget(tax_legend)
-        legend_layout.addWidget(months_legend)
-        legend_layout.addWidget(cashflow_legend)
-        legend_layout.addWidget(networth_legend)
-        legend_layout.addWidget(marker_legend)
+        legend_layout.setSpacing(12)
+        invest_legend = QLabel("● Invest Proceeds")
+        invest_legend.setStyleSheet("color: #2ecc71; font-size: 10px; font-weight: bold;")
+        invest_legend.setToolTip("Lump sum invested at 7% annual return")
+        paydebt_legend = QLabel("● Pay Off Debt")
+        paydebt_legend.setStyleSheet("color: #3498db; font-size: 10px; font-weight: bold;")
+        paydebt_legend.setToolTip("Interest saved + freed cashflow invested at 7%")
+        legend_layout.addWidget(invest_legend)
+        legend_layout.addWidget(paydebt_legend)
         legend_layout.addStretch()
-        right_layout.addWidget(self.tradeoff_legend)
+        right_layout.addWidget(self.projection_legend)
 
         # Waterfall legend (hidden by default)
         self.waterfall_legend = QWidget()
@@ -1256,6 +1282,93 @@ class TaxSettingsPage(QWizardPage):
         waterfall_legend_layout.addWidget(self.waterfall_legend_label)
         waterfall_legend_layout.addStretch()
         right_layout.addWidget(self.waterfall_legend)
+
+        # Investment growth legend and controls (hidden by default)
+        self.investment_legend = QWidget()
+        self.investment_legend.setVisible(False)
+        investment_main_layout = QVBoxLayout(self.investment_legend)
+        investment_main_layout.setContentsMargins(0, 0, 0, 0)
+        investment_main_layout.setSpacing(4)
+
+        # Legend row
+        legend_row = QHBoxLayout()
+        legend_row.setSpacing(12)
+        k401_legend = QLabel("● 401k")
+        k401_legend.setStyleSheet("color: #e74c3c; font-size: 10px; font-weight: bold;")
+        k401_legend.setToolTip("Pre-tax contributions, taxed at withdrawal")
+        roth_legend = QLabel("● Roth IRA")
+        roth_legend.setStyleSheet("color: #9b59b6; font-size: 10px; font-weight: bold;")
+        roth_legend.setToolTip("Post-tax contributions, tax-free growth & withdrawal")
+        combined_legend = QLabel("● Combined")
+        combined_legend.setStyleSheet("color: #f39c12; font-size: 10px; font-weight: bold;")
+        combined_legend.setToolTip("Split contributions between 401k and Roth IRA")
+        legend_row.addWidget(k401_legend)
+        legend_row.addWidget(roth_legend)
+        legend_row.addWidget(combined_legend)
+        legend_row.addStretch()
+        investment_main_layout.addLayout(legend_row)
+
+        # Sliders row
+        sliders_row = QHBoxLayout()
+        sliders_row.setSpacing(8)
+
+        # 401k percentage slider
+        k401_label = QLabel("401k:")
+        k401_label.setStyleSheet("color: #e74c3c; font-size: 10px;")
+        sliders_row.addWidget(k401_label)
+
+        self.k401_pct_slider = QSlider(Qt.Orientation.Horizontal)
+        self.k401_pct_slider.setRange(0, 100)
+        self.k401_pct_slider.setValue(60)
+        self.k401_pct_slider.setFixedWidth(80)
+        self.k401_pct_slider.setToolTip("Percentage of contribution to 401k")
+        self.k401_pct_slider.valueChanged.connect(self._on_investment_slider_changed)
+        sliders_row.addWidget(self.k401_pct_slider)
+
+        self.k401_pct_label = QLabel("60%")
+        self.k401_pct_label.setStyleSheet("color: #e74c3c; font-size: 10px; font-weight: bold; min-width: 35px;")
+        sliders_row.addWidget(self.k401_pct_label)
+
+        sliders_row.addSpacing(12)
+
+        # Roth IRA percentage slider
+        roth_label = QLabel("Roth:")
+        roth_label.setStyleSheet("color: #9b59b6; font-size: 10px;")
+        sliders_row.addWidget(roth_label)
+
+        self.roth_pct_slider = QSlider(Qt.Orientation.Horizontal)
+        self.roth_pct_slider.setRange(0, 100)
+        self.roth_pct_slider.setValue(40)
+        self.roth_pct_slider.setFixedWidth(80)
+        self.roth_pct_slider.setToolTip("Percentage of contribution to Roth IRA")
+        self.roth_pct_slider.valueChanged.connect(self._on_investment_slider_changed)
+        sliders_row.addWidget(self.roth_pct_slider)
+
+        self.roth_pct_label = QLabel("40%")
+        self.roth_pct_label.setStyleSheet("color: #9b59b6; font-size: 10px; font-weight: bold; min-width: 35px;")
+        sliders_row.addWidget(self.roth_pct_label)
+
+        sliders_row.addSpacing(20)
+
+        # Risk level selector
+        risk_label = QLabel("Risk:")
+        risk_label.setStyleSheet("font-size: 10px;")
+        sliders_row.addWidget(risk_label)
+
+        self.risk_combo = QComboBox()
+        self.risk_combo.addItem("Low (5%)", "conservative")
+        self.risk_combo.addItem("Moderate (7%)", "moderate")
+        self.risk_combo.addItem("High (10%)", "aggressive")
+        self.risk_combo.setCurrentIndex(1)  # Default to moderate
+        self.risk_combo.setToolTip("Expected annual investment return based on risk tolerance")
+        self.risk_combo.setFixedWidth(100)
+        self.risk_combo.currentIndexChanged.connect(self._on_investment_slider_changed)
+        sliders_row.addWidget(self.risk_combo)
+
+        sliders_row.addStretch()
+        investment_main_layout.addLayout(sliders_row)
+
+        right_layout.addWidget(self.investment_legend)
 
         splitter.addWidget(right_panel)
 
@@ -1277,107 +1390,108 @@ class TaxSettingsPage(QWizardPage):
         self.chart.legend().hide()
         self.chart.setMargins(QMargins(5, 5, 5, 5))
 
-        # Tax series (red)
-        self.tax_series = QLineSeries()
-        self.tax_series.setName("Tax Owed")
-        pen = QPen(QColor("#cc0000"))
-        pen.setWidth(2)
-        self.tax_series.setPen(pen)
+        # Invest series (green) - lump sum invested at 7%
+        self.invest_series = QLineSeries()
+        self.invest_series.setName("Invest Proceeds")
+        pen = QPen(QColor("#2ecc71"))
+        pen.setWidth(3)
+        self.invest_series.setPen(pen)
 
-        # Months series (blue)
-        self.months_series = QLineSeries()
-        self.months_series.setName("Months to Debt-Free")
-        pen = QPen(QColor("#0066cc"))
-        pen.setWidth(2)
-        self.months_series.setPen(pen)
+        # Pay debt series (blue) - interest saved + freed cashflow invested
+        self.paydebt_series = QLineSeries()
+        self.paydebt_series.setName("Pay Off Debt")
+        pen = QPen(QColor("#3498db"))
+        pen.setWidth(3)
+        self.paydebt_series.setPen(pen)
 
-        # Current position marker (green diamond)
-        self.marker_series = QScatterSeries()
-        self.marker_series.setName("Current")
-        self.marker_series.setMarkerSize(12)
-        self.marker_series.setColor(QColor("#00cc00"))
+        # Area fill for invest series
+        self.invest_area = QAreaSeries(self.invest_series)
+        self.invest_area.setColor(QColor(46, 204, 113, 50))  # Semi-transparent green
+        self.invest_area.setBorderColor(QColor("#2ecc71"))
 
-        # Net worth change series (purple)
-        self.networth_series = QLineSeries()
-        self.networth_series.setName("Net Worth Change")
-        pen = QPen(QColor("#9933cc"))
-        pen.setWidth(2)
-        self.networth_series.setPen(pen)
+        # Area fill for paydebt series
+        self.paydebt_area = QAreaSeries(self.paydebt_series)
+        self.paydebt_area.setColor(QColor(52, 152, 219, 50))  # Semi-transparent blue
+        self.paydebt_area.setBorderColor(QColor("#3498db"))
 
-        # Net worth marker (purple diamond)
-        self.networth_marker_series = QScatterSeries()
-        self.networth_marker_series.setName("Current Net Worth")
-        self.networth_marker_series.setMarkerSize(10)
-        self.networth_marker_series.setColor(QColor("#9933cc"))
+        # Investment growth series - 401k (red)
+        self.k401_series = QLineSeries()
+        self.k401_series.setName("401k")
+        pen = QPen(QColor("#e74c3c"))
+        pen.setWidth(3)
+        self.k401_series.setPen(pen)
 
-        # Cash flow series (orange) - shows monthly cash flow reduction
-        self.cashflow_series = QLineSeries()
-        self.cashflow_series.setName("Monthly Cash Flow")
-        pen = QPen(QColor("#cc6600"))
-        pen.setWidth(2)
-        self.cashflow_series.setPen(pen)
+        # Investment growth series - Roth IRA (purple)
+        self.roth_series = QLineSeries()
+        self.roth_series.setName("Roth IRA")
+        pen = QPen(QColor("#9b59b6"))
+        pen.setWidth(3)
+        self.roth_series.setPen(pen)
 
-        # Cash flow marker (orange diamond)
-        self.cashflow_marker_series = QScatterSeries()
-        self.cashflow_marker_series.setName("Current Cash Flow")
-        self.cashflow_marker_series.setMarkerSize(10)
-        self.cashflow_marker_series.setColor(QColor("#cc6600"))
+        # Investment growth series - Combined (orange)
+        self.combined_series = QLineSeries()
+        self.combined_series.setName("Combined")
+        pen = QPen(QColor("#f39c12"))
+        pen.setWidth(3)
+        self.combined_series.setPen(pen)
 
-        self.chart.addSeries(self.tax_series)
-        self.chart.addSeries(self.months_series)
-        self.chart.addSeries(self.networth_series)
-        self.chart.addSeries(self.cashflow_series)
-        self.chart.addSeries(self.marker_series)
-        self.chart.addSeries(self.networth_marker_series)
-        self.chart.addSeries(self.cashflow_marker_series)
+        # Area fills for investment series
+        self.k401_area = QAreaSeries(self.k401_series)
+        self.k401_area.setColor(QColor(231, 76, 60, 40))
+        self.k401_area.setBorderColor(QColor("#e74c3c"))
 
-        # X axis (401k contribution)
+        self.roth_area = QAreaSeries(self.roth_series)
+        self.roth_area.setColor(QColor(155, 89, 182, 40))
+        self.roth_area.setBorderColor(QColor("#9b59b6"))
+
+        self.combined_area = QAreaSeries(self.combined_series)
+        self.combined_area.setColor(QColor(243, 156, 18, 40))
+        self.combined_area.setBorderColor(QColor("#f39c12"))
+
+        self.chart.addSeries(self.invest_area)
+        self.chart.addSeries(self.paydebt_area)
+        self.chart.addSeries(self.invest_series)
+        self.chart.addSeries(self.paydebt_series)
+        self.chart.addSeries(self.k401_area)
+        self.chart.addSeries(self.roth_area)
+        self.chart.addSeries(self.combined_area)
+        self.chart.addSeries(self.k401_series)
+        self.chart.addSeries(self.roth_series)
+        self.chart.addSeries(self.combined_series)
+
+        # X axis (Years)
         self.x_axis = QValueAxis()
-        self.x_axis.setTitleText("Additional 401k ($)")
-        self.x_axis.setRange(0, MAX_401K_CONTRIBUTION)
-        self.x_axis.setLabelFormat("$%.0f")
+        self.x_axis.setTitleText("Years")
+        self.x_axis.setRange(0, 10)
+        self.x_axis.setTickCount(11)
+        self.x_axis.setLabelFormat("%.0f")
         self.chart.addAxis(self.x_axis, Qt.AlignmentFlag.AlignBottom)
-        self.tax_series.attachAxis(self.x_axis)
-        self.months_series.attachAxis(self.x_axis)
-        self.marker_series.attachAxis(self.x_axis)
-        self.networth_series.attachAxis(self.x_axis)
-        self.networth_marker_series.attachAxis(self.x_axis)
-        self.cashflow_series.attachAxis(self.x_axis)
-        self.cashflow_marker_series.attachAxis(self.x_axis)
+        self.invest_series.attachAxis(self.x_axis)
+        self.paydebt_series.attachAxis(self.x_axis)
+        self.invest_area.attachAxis(self.x_axis)
+        self.paydebt_area.attachAxis(self.x_axis)
+        self.k401_series.attachAxis(self.x_axis)
+        self.roth_series.attachAxis(self.x_axis)
+        self.combined_series.attachAxis(self.x_axis)
+        self.k401_area.attachAxis(self.x_axis)
+        self.roth_area.attachAxis(self.x_axis)
+        self.combined_area.attachAxis(self.x_axis)
 
-        # Y axis for tax (left, red)
-        self.y_tax_axis = QValueAxis()
-        self.y_tax_axis.setTitleText("Tax ($)")
-        self.y_tax_axis.setLabelsColor(QColor("#cc0000"))
-        self.y_tax_axis.setLabelFormat("$%.0f")
-        self.chart.addAxis(self.y_tax_axis, Qt.AlignmentFlag.AlignLeft)
-        self.tax_series.attachAxis(self.y_tax_axis)
-        self.marker_series.attachAxis(self.y_tax_axis)
-
-        # Y axis for cash flow (left, orange) - shows monthly cash reduction
-        self.y_cashflow_axis = QValueAxis()
-        self.y_cashflow_axis.setTitleText("$/mo")
-        self.y_cashflow_axis.setLabelsColor(QColor("#cc6600"))
-        self.y_cashflow_axis.setLabelFormat("$%.0f")
-        self.chart.addAxis(self.y_cashflow_axis, Qt.AlignmentFlag.AlignLeft)
-        self.cashflow_series.attachAxis(self.y_cashflow_axis)
-        self.cashflow_marker_series.attachAxis(self.y_cashflow_axis)
-
-        # Y axis for months (right, blue)
-        self.y_months_axis = QValueAxis()
-        self.y_months_axis.setTitleText("Months")
-        self.y_months_axis.setLabelsColor(QColor("#0066cc"))
-        self.chart.addAxis(self.y_months_axis, Qt.AlignmentFlag.AlignRight)
-        self.months_series.attachAxis(self.y_months_axis)
-
-        # Y axis for net worth (far right, purple) - shows projected 10-year net worth increase
-        self.y_networth_axis = QValueAxis()
-        self.y_networth_axis.setTitleText("10Y Net Worth ($)")
-        self.y_networth_axis.setLabelsColor(QColor("#9933cc"))
-        self.y_networth_axis.setLabelFormat("$%.0fk")
-        self.chart.addAxis(self.y_networth_axis, Qt.AlignmentFlag.AlignRight)
-        self.networth_series.attachAxis(self.y_networth_axis)
-        self.networth_marker_series.attachAxis(self.y_networth_axis)
+        # Y axis for value ($)
+        self.y_value_axis = QValueAxis()
+        self.y_value_axis.setTitleText("Cumulative Benefit ($)")
+        self.y_value_axis.setLabelFormat("$%.0f")
+        self.chart.addAxis(self.y_value_axis, Qt.AlignmentFlag.AlignLeft)
+        self.invest_series.attachAxis(self.y_value_axis)
+        self.paydebt_series.attachAxis(self.y_value_axis)
+        self.invest_area.attachAxis(self.y_value_axis)
+        self.paydebt_area.attachAxis(self.y_value_axis)
+        self.k401_series.attachAxis(self.y_value_axis)
+        self.roth_series.attachAxis(self.y_value_axis)
+        self.combined_series.attachAxis(self.y_value_axis)
+        self.k401_area.attachAxis(self.y_value_axis)
+        self.roth_area.attachAxis(self.y_value_axis)
+        self.combined_area.attachAxis(self.y_value_axis)
 
         self.chart_view = QChartView(self.chart)
         self.chart_view.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -1389,7 +1503,7 @@ class TaxSettingsPage(QWizardPage):
         asset_page = wizard.page(0)
         self._selected_assets = asset_page.get_selections()
         self._liabilities = LiabilityOperations.get_all()
-        self._update_chart()
+        self._update_current_chart()
         self._update_display()  # Refresh silver analysis and other displays with loaded assets
 
     def _load_income(self):
@@ -1421,7 +1535,7 @@ class TaxSettingsPage(QWizardPage):
         self.efund_rate_input.setEnabled(enabled and is_avalanche)
         self.efund_rate_input.setVisible(enabled and is_avalanche)
         self.efund_rate_label.setVisible(enabled and is_avalanche)
-        self._update_chart()
+        self._update_current_chart()
         self._update_display()
 
     def _on_efund_mode_changed(self, index):
@@ -1431,7 +1545,7 @@ class TaxSettingsPage(QWizardPage):
         self.efund_rate_input.setEnabled(enabled and is_avalanche)
         self.efund_rate_input.setVisible(is_avalanche)
         self.efund_rate_label.setVisible(is_avalanche)
-        self._update_chart()
+        self._update_current_chart()
         self._update_display()
 
     def _set_efund_months(self, months: int):
@@ -1546,19 +1660,19 @@ class TaxSettingsPage(QWizardPage):
         self.contribution_slider.setMaximum(max_additional)
         self.max_label.setText(f"${max_additional:,}")
         self.x_axis.setRange(0, max(max_additional, 1000))
-        self._update_chart()
+        self._update_current_chart()
         self._update_display()
 
     def _on_inputs_changed(self):
         """Handle changes to income/filing inputs."""
-        self._update_chart()
+        self._update_current_chart()
         self._update_display()
 
     def _on_slider_changed(self, value):
         """Handle slider value changes."""
         self.slider_value_label.setText(f"${value:,}")
         self._update_display()
-        self._update_marker()
+        self._update_current_chart()
 
     def _on_goal_slider_changed(self, value):
         """Handle goal slider value changes."""
@@ -1578,7 +1692,7 @@ class TaxSettingsPage(QWizardPage):
                 goal_text = f"{value} month{'s' if value > 1 else ''}"
 
             self.goal_value_label.setText(goal_text)
-            self.goal_value_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #006600;")
+            self.goal_value_label.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {theme().palette.positive};")
 
             # Compare goal to current projection
             additional_401k = self.contribution_slider.value()
@@ -1586,18 +1700,18 @@ class TaxSettingsPage(QWizardPage):
 
             if projected_months == 0:
                 self.goal_status_label.setText("No debt to pay off")
-                self.goal_status_label.setStyleSheet("font-size: 11px; color: #006600;")
+                self.goal_status_label.setStyleSheet(f"font-size: 11px; color: {theme().palette.positive};")
             elif projected_months <= value:
                 diff = value - projected_months
                 if diff == 0:
                     self.goal_status_label.setText("Goal met exactly!")
                 else:
                     self.goal_status_label.setText(f"On track! {diff} month{'s' if diff > 1 else ''} ahead of goal")
-                self.goal_status_label.setStyleSheet("font-size: 11px; color: #006600; font-weight: bold;")
+                self.goal_status_label.setStyleSheet(f"font-size: 11px; color: {theme().palette.positive}; font-weight: bold;")
             else:
                 diff = projected_months - value
                 self.goal_status_label.setText(f"Behind goal by {diff} month{'s' if diff > 1 else ''}")
-                self.goal_status_label.setStyleSheet("font-size: 11px; color: #cc0000; font-weight: bold;")
+                self.goal_status_label.setStyleSheet(f"font-size: 11px; color: {theme().palette.negative}; font-weight: bold;")
 
     def _calculate_tax_and_months(self, additional_401k: float) -> Tuple[float, int]:
         """Calculate tax owed and months to debt-free for given 401k contribution.
@@ -1809,105 +1923,204 @@ class TaxSettingsPage(QWizardPage):
         # Return in thousands for display
         return net_worth_change / 1000
 
-    def _update_chart(self):
-        """Update chart with data points across 401k contribution range."""
-        self.tax_series.clear()
-        self.months_series.clear()
-        self.networth_series.clear()
-        self.cashflow_series.clear()
+    def _update_projection_chart(self):
+        """Update the invest vs pay debt projection chart."""
+        self.invest_series.clear()
+        self.paydebt_series.clear()
 
-        max_contrib = self.contribution_slider.maximum()
-        if max_contrib <= 0:
-            max_contrib = 1000
+        # Get current tax settings to calculate net proceeds
+        if not hasattr(self, '_selected_assets') or not self._selected_assets:
+            return
+        if not hasattr(self, '_liabilities') or not self._liabilities:
+            return
 
-        # Calculate points
-        step = max(500, max_contrib // 20)
-        max_tax = 0
-        max_months = 0
-        max_networth = 0
-        min_networth = float('inf')
-        max_cashflow = 0
+        # Calculate net proceeds after tax
+        total_value = sum(s.value_to_sell for s in self._selected_assets)
+        total_gain = sum(s.gain_loss for s in self._selected_assets)
 
-        for contrib in range(0, max_contrib + 1, step):
-            tax, months = self._calculate_tax_and_months(contrib)
-            networth = self._calculate_net_worth_change(contrib)
-            # Cash flow reduction is monthly 401k contribution (scaled to hundreds for visibility)
-            monthly_reduction = contrib / 12
-            # Scale to make it visible on the tax axis (divide by 10 for reasonable range)
-            cashflow_scaled = monthly_reduction
+        gross = self.gross_income_input.value()
+        current_401k = self.current_401k_input.value()
+        additional_401k = self.contribution_slider.value()
+        status = self.filing_status.currentData()
+        threshold = LTCG_THRESHOLDS.get(status, 47025)
+        taxable_income = gross - current_401k - additional_401k
+        headroom = max(0, threshold - taxable_income)
 
-            self.tax_series.append(contrib, tax)
-            self.months_series.append(contrib, months)
-            self.networth_series.append(contrib, networth)
-            self.cashflow_series.append(contrib, cashflow_scaled)
+        if total_gain <= 0:
+            tax = 0
+        elif total_gain <= headroom:
+            tax = 0
+        else:
+            tax = (total_gain - headroom) * 0.15
 
-            max_tax = max(max_tax, tax)
-            max_months = max(max_months, months)
-            max_networth = max(max_networth, networth)
-            min_networth = min(min_networth, networth)
-            max_cashflow = max(max_cashflow, cashflow_scaled)
+        net_proceeds = total_value - tax
+        if net_proceeds <= 0:
+            return
 
-        # Set axis ranges
-        self.y_tax_axis.setRange(0, max(max_tax * 1.1, 100))
-        self.y_cashflow_axis.setRange(0, max(max_cashflow * 1.1, 100))
-        self.y_months_axis.setRange(0, max(max_months * 1.1, 12))
+        # Investment return rate
+        investment_return = HISTORICAL_RETURNS['moderate']  # 7%
+        monthly_return = (1 + investment_return) ** (1/12) - 1
 
-        # Net worth axis - show reasonable range
-        if min_networth == float('inf'):
-            min_networth = 0
-        range_padding = max((max_networth - min_networth) * 0.1, 10)
-        self.y_networth_axis.setRange(
-            max(0, min_networth - range_padding),
-            max_networth + range_padding
-        )
+        # Calculate year-by-year projections
+        max_value = 0
 
-        self._update_marker()
+        for year in range(11):  # 0 to 10 years
+            months = year * 12
 
-    def _update_marker(self):
-        """Update the current position marker on chart."""
-        self.marker_series.clear()
-        self.networth_marker_series.clear()
-        self.cashflow_marker_series.clear()
-        current_contrib = self.contribution_slider.value()
-        tax, _ = self._calculate_tax_and_months(current_contrib)
-        networth = self._calculate_net_worth_change(current_contrib)
-        cashflow = current_contrib / 12  # Monthly reduction in cash flow
-        self.marker_series.append(current_contrib, tax)
-        self.networth_marker_series.append(current_contrib, networth)
-        self.cashflow_marker_series.append(current_contrib, cashflow)
+            # Option 1: Invest the lump sum
+            invest_value = net_proceeds * ((1 + investment_return) ** year)
+            invest_benefit = invest_value - net_proceeds  # Just the growth
+
+            # Option 2: Pay off debt - calculate cumulative benefit
+            # Interest saved is earned immediately (like a guaranteed return)
+            # Freed cashflow is invested over the remaining period
+            interest_saved = self._calculate_interest_saved_with_payoff(net_proceeds)
+            # Pro-rate interest saved over the payoff period (simplified: linear)
+            interest_benefit_so_far = interest_saved * min(year / 10, 1.0)
+
+            # Freed cashflow invested - calculate cumulative value at this point
+            freed_cashflow_value = self._calculate_freed_cashflow_at_year(net_proceeds, year)
+
+            paydebt_benefit = interest_benefit_so_far + freed_cashflow_value
+
+            self.invest_series.append(year, invest_benefit)
+            self.paydebt_series.append(year, paydebt_benefit)
+
+            max_value = max(max_value, invest_benefit, paydebt_benefit)
+
+        # Set axis range
+        self.y_value_axis.setRange(0, max(max_value * 1.1, 1000))
+
+    def _calculate_freed_cashflow_at_year(self, lump_sum: float, target_year: int) -> float:
+        """Calculate cumulative value of freed cashflow invested up to a specific year."""
+        if not self._liabilities or lump_sum <= 0 or target_year <= 0:
+            return 0.0
+
+        investment_return = HISTORICAL_RETURNS['moderate']
+        monthly_return = (1 + investment_return) ** (1/12) - 1
+        target_months = target_year * 12
+        max_sim_months = 600
+
+        # Calculate payoff month for each debt WITHOUT lump sum (baseline)
+        baseline_payoff_months = {}
+        balances_baseline = {l.id: l.current_balance for l in self._liabilities}
+
+        month = 0
+        while any(b > 0.01 for b in balances_baseline.values()) and month < max_sim_months:
+            month += 1
+            for l in self._liabilities:
+                if balances_baseline[l.id] > 0:
+                    interest = balances_baseline[l.id] * l.monthly_interest_rate
+                    balances_baseline[l.id] += interest
+                    pmt = min(l.monthly_payment, balances_baseline[l.id])
+                    balances_baseline[l.id] -= pmt
+                    if balances_baseline[l.id] <= 0.01 and l.id not in baseline_payoff_months:
+                        baseline_payoff_months[l.id] = month
+
+        for l in self._liabilities:
+            if l.id not in baseline_payoff_months:
+                baseline_payoff_months[l.id] = max_sim_months
+
+        # Calculate payoff month WITH lump sum (avalanche)
+        lumpsum_payoff_months = {}
+        balances_payoff = {l.id: l.current_balance for l in self._liabilities}
+        remaining_lump = lump_sum
+
+        sorted_liabilities = sorted(self._liabilities, key=lambda x: x.interest_rate, reverse=True)
+        for l in sorted_liabilities:
+            if remaining_lump <= 0:
+                break
+            payoff_amount = min(remaining_lump, balances_payoff[l.id])
+            balances_payoff[l.id] -= payoff_amount
+            remaining_lump -= payoff_amount
+            if balances_payoff[l.id] <= 0.01:
+                lumpsum_payoff_months[l.id] = 0
+
+        month = 0
+        while any(b > 0.01 for b in balances_payoff.values()) and month < max_sim_months:
+            month += 1
+            for l in self._liabilities:
+                if balances_payoff[l.id] > 0:
+                    interest = balances_payoff[l.id] * l.monthly_interest_rate
+                    balances_payoff[l.id] += interest
+                    pmt = min(l.monthly_payment, balances_payoff[l.id])
+                    balances_payoff[l.id] -= pmt
+                    if balances_payoff[l.id] <= 0.01 and l.id not in lumpsum_payoff_months:
+                        lumpsum_payoff_months[l.id] = month
+
+        for l in self._liabilities:
+            if l.id not in lumpsum_payoff_months:
+                lumpsum_payoff_months[l.id] = max_sim_months
+
+        # Calculate cumulative invested value up to target month
+        total_invested_value = 0.0
+
+        for month in range(1, target_months + 1):
+            freed_this_month = 0.0
+            for l in self._liabilities:
+                if lumpsum_payoff_months[l.id] < month <= baseline_payoff_months[l.id]:
+                    freed_this_month += l.monthly_payment
+
+            if freed_this_month > 0:
+                months_to_grow = target_months - month
+                future_value = freed_this_month * ((1 + monthly_return) ** months_to_grow)
+                total_invested_value += future_value
+
+        return total_invested_value
+
+    def _update_current_chart(self):
+        """Update the currently visible chart."""
+        chart_type = self.chart_type_combo.currentData()
+        if chart_type == "projection":
+            self._update_projection_chart()
+        elif chart_type == "investment":
+            self._update_investment_chart()
+        else:
+            self._update_waterfall_chart()
 
     def _on_chart_type_changed(self, index):
         """Handle chart type selection change."""
         chart_type = self.chart_type_combo.currentData()
-        if chart_type == "tradeoff":
-            self.chart_label.setText("Tax vs Debt Payoff Trade-off")
-            self.tradeoff_legend.setVisible(True)
+        if chart_type == "projection":
+            self.chart_label.setText("10-Year Strategy Comparison")
+            self.projection_legend.setVisible(True)
             self.waterfall_legend.setVisible(False)
-            self._show_tradeoff_chart()
+            self.investment_legend.setVisible(False)
+            self._show_projection_chart()
+        elif chart_type == "investment":
+            self.chart_label.setText("Investment Growth: 401k vs Roth IRA")
+            self.projection_legend.setVisible(False)
+            self.waterfall_legend.setVisible(False)
+            self.investment_legend.setVisible(True)
+            self._show_investment_chart()
         else:
             self.chart_label.setText("Debt Payoff Timeline")
-            self.tradeoff_legend.setVisible(False)
+            self.projection_legend.setVisible(False)
             self.waterfall_legend.setVisible(True)
+            self.investment_legend.setVisible(False)
             self._show_waterfall_chart()
 
-    def _show_tradeoff_chart(self):
-        """Show the trade-off chart series and axes."""
-        # Show trade-off series
-        self.tax_series.setVisible(True)
-        self.months_series.setVisible(True)
-        self.networth_series.setVisible(True)
-        self.cashflow_series.setVisible(True)
-        self.marker_series.setVisible(True)
-        self.networth_marker_series.setVisible(True)
-        self.cashflow_marker_series.setVisible(True)
+    def _show_projection_chart(self):
+        """Show the invest vs pay debt projection chart."""
+        # Show projection series
+        self.invest_series.setVisible(True)
+        self.paydebt_series.setVisible(True)
+        self.invest_area.setVisible(True)
+        self.paydebt_area.setVisible(True)
 
-        # Show trade-off axes
+        # Hide investment series
+        self.k401_series.setVisible(False)
+        self.roth_series.setVisible(False)
+        self.combined_series.setVisible(False)
+        self.k401_area.setVisible(False)
+        self.roth_area.setVisible(False)
+        self.combined_area.setVisible(False)
+
+        # Show projection axes
         self.x_axis.setVisible(True)
-        self.x_axis.setTitleText("Additional 401k ($)")
-        self.y_tax_axis.setVisible(True)
-        self.y_months_axis.setVisible(True)
-        self.y_networth_axis.setVisible(True)
-        self.y_cashflow_axis.setVisible(True)
+        self.x_axis.setTitleText("Years")
+        self.y_value_axis.setVisible(True)
+        self.y_value_axis.setTitleText("Cumulative Benefit ($)")
 
         # Hide waterfall series
         for series in getattr(self, '_waterfall_series', []):
@@ -1917,27 +2130,355 @@ class TaxSettingsPage(QWizardPage):
         if hasattr(self, '_waterfall_y_axis'):
             self._waterfall_y_axis.setVisible(False)
 
-        self._update_chart()
+        self._update_projection_chart()
 
     def _show_waterfall_chart(self):
         """Show the debt waterfall chart."""
-        # Hide trade-off series
-        self.tax_series.setVisible(False)
-        self.months_series.setVisible(False)
-        self.networth_series.setVisible(False)
-        self.cashflow_series.setVisible(False)
-        self.marker_series.setVisible(False)
-        self.networth_marker_series.setVisible(False)
-        self.cashflow_marker_series.setVisible(False)
+        # Hide projection series
+        self.invest_series.setVisible(False)
+        self.paydebt_series.setVisible(False)
+        self.invest_area.setVisible(False)
+        self.paydebt_area.setVisible(False)
 
-        # Hide trade-off axes
+        # Hide investment series
+        self.k401_series.setVisible(False)
+        self.roth_series.setVisible(False)
+        self.combined_series.setVisible(False)
+        self.k401_area.setVisible(False)
+        self.roth_area.setVisible(False)
+        self.combined_area.setVisible(False)
+
+        # Hide projection axes
         self.x_axis.setVisible(False)
-        self.y_tax_axis.setVisible(False)
-        self.y_months_axis.setVisible(False)
-        self.y_networth_axis.setVisible(False)
-        self.y_cashflow_axis.setVisible(False)
+        self.y_value_axis.setVisible(False)
 
         self._update_waterfall_chart()
+
+    def _show_fullscreen_chart(self):
+        """Show the current chart in a fullscreen dialog."""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout
+        from PyQt6.QtCore import QMargins
+
+        # Create fullscreen dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.chart_label.text())
+        dialog.setMinimumSize(1200, 800)
+        dialog.showMaximized()
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # Create a new chart view for the dialog
+        fullscreen_chart = QChart()
+        fullscreen_chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)
+        fullscreen_chart.legend().hide()
+        fullscreen_chart.setMargins(QMargins(10, 10, 10, 10))
+        fullscreen_chart.setTitle(self.chart_label.text())
+        fullscreen_chart.setTitleFont(QFont("", 14, QFont.Weight.Bold))
+
+        # Get current chart type and copy relevant series data
+        chart_type = self.chart_type_combo.currentData()
+
+        if chart_type == "projection":
+            # Copy projection series
+            invest_series = QLineSeries()
+            invest_series.setName("Invest Proceeds")
+            pen = QPen(QColor("#2ecc71"))
+            pen.setWidth(3)
+            invest_series.setPen(pen)
+            for i in range(self.invest_series.count()):
+                pt = self.invest_series.at(i)
+                invest_series.append(pt.x(), pt.y())
+
+            paydebt_series = QLineSeries()
+            paydebt_series.setName("Pay Off Debt")
+            pen = QPen(QColor("#3498db"))
+            pen.setWidth(3)
+            paydebt_series.setPen(pen)
+            for i in range(self.paydebt_series.count()):
+                pt = self.paydebt_series.at(i)
+                paydebt_series.append(pt.x(), pt.y())
+
+            invest_area = QAreaSeries(invest_series)
+            invest_area.setColor(QColor(46, 204, 113, 50))
+            paydebt_area = QAreaSeries(paydebt_series)
+            paydebt_area.setColor(QColor(52, 152, 219, 50))
+
+            fullscreen_chart.addSeries(invest_area)
+            fullscreen_chart.addSeries(paydebt_area)
+            fullscreen_chart.addSeries(invest_series)
+            fullscreen_chart.addSeries(paydebt_series)
+
+            x_axis = QValueAxis()
+            x_axis.setTitleText("Years")
+            x_axis.setRange(0, 10)
+            x_axis.setTickCount(11)
+            fullscreen_chart.addAxis(x_axis, Qt.AlignmentFlag.AlignBottom)
+
+            y_axis = QValueAxis()
+            y_axis.setTitleText("Cumulative Benefit ($)")
+            y_axis.setRange(self.y_value_axis.min(), self.y_value_axis.max())
+            fullscreen_chart.addAxis(y_axis, Qt.AlignmentFlag.AlignLeft)
+
+            for s in [invest_series, paydebt_series, invest_area, paydebt_area]:
+                s.attachAxis(x_axis)
+                s.attachAxis(y_axis)
+
+            fullscreen_chart.legend().setVisible(True)
+            fullscreen_chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
+
+        elif chart_type == "investment":
+            # Copy investment series
+            k401_series = QLineSeries()
+            k401_series.setName("401k (100%)")
+            pen = QPen(QColor("#e74c3c"))
+            pen.setWidth(3)
+            k401_series.setPen(pen)
+            for i in range(self.k401_series.count()):
+                pt = self.k401_series.at(i)
+                k401_series.append(pt.x(), pt.y())
+
+            roth_series = QLineSeries()
+            roth_series.setName("Roth IRA (100%)")
+            pen = QPen(QColor("#9b59b6"))
+            pen.setWidth(3)
+            roth_series.setPen(pen)
+            for i in range(self.roth_series.count()):
+                pt = self.roth_series.at(i)
+                roth_series.append(pt.x(), pt.y())
+
+            combined_series = QLineSeries()
+            k401_pct = self.k401_pct_slider.value()
+            roth_pct = self.roth_pct_slider.value()
+            combined_series.setName(f"Combined ({k401_pct}% / {roth_pct}%)")
+            pen = QPen(QColor("#f39c12"))
+            pen.setWidth(3)
+            combined_series.setPen(pen)
+            for i in range(self.combined_series.count()):
+                pt = self.combined_series.at(i)
+                combined_series.append(pt.x(), pt.y())
+
+            k401_area = QAreaSeries(k401_series)
+            k401_area.setColor(QColor(231, 76, 60, 40))
+            roth_area = QAreaSeries(roth_series)
+            roth_area.setColor(QColor(155, 89, 182, 40))
+            combined_area = QAreaSeries(combined_series)
+            combined_area.setColor(QColor(243, 156, 18, 40))
+
+            fullscreen_chart.addSeries(k401_area)
+            fullscreen_chart.addSeries(roth_area)
+            fullscreen_chart.addSeries(combined_area)
+            fullscreen_chart.addSeries(k401_series)
+            fullscreen_chart.addSeries(roth_series)
+            fullscreen_chart.addSeries(combined_series)
+
+            x_axis = QValueAxis()
+            x_axis.setTitleText("Years")
+            x_axis.setRange(0, 30)
+            x_axis.setTickCount(7)
+            fullscreen_chart.addAxis(x_axis, Qt.AlignmentFlag.AlignBottom)
+
+            y_axis = QValueAxis()
+            y_axis.setTitleText("Portfolio Value ($)")
+            y_axis.setRange(self.y_value_axis.min(), self.y_value_axis.max())
+            if self.y_value_axis.max() > 1000000:
+                y_axis.setLabelFormat("$%.1fM")
+            else:
+                y_axis.setLabelFormat("$%.0fk")
+            fullscreen_chart.addAxis(y_axis, Qt.AlignmentFlag.AlignLeft)
+
+            for s in [k401_series, roth_series, combined_series, k401_area, roth_area, combined_area]:
+                s.attachAxis(x_axis)
+                s.attachAxis(y_axis)
+
+            fullscreen_chart.legend().setVisible(True)
+            fullscreen_chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
+
+        else:
+            # Waterfall - just show a message for now as it's more complex
+            fullscreen_chart.setTitle("Debt Waterfall (use main view)")
+
+        chart_view = QChartView(fullscreen_chart)
+        chart_view.setRenderHint(QPainter.RenderHint.Antialiasing)
+        layout.addWidget(chart_view)
+
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.close)
+        close_btn.setFixedWidth(100)
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        btn_layout.addWidget(close_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        dialog.exec()
+
+    def _on_investment_slider_changed(self, value):
+        """Handle investment allocation slider changes."""
+        # Update labels
+        k401_pct = self.k401_pct_slider.value()
+        roth_pct = self.roth_pct_slider.value()
+
+        self.k401_pct_label.setText(f"{k401_pct}%")
+        self.roth_pct_label.setText(f"{roth_pct}%")
+
+        # Update the chart
+        if self.chart_type_combo.currentData() == "investment":
+            self._update_investment_chart()
+
+    def _show_investment_chart(self):
+        """Show the investment growth comparison chart."""
+        # Hide projection series
+        self.invest_series.setVisible(False)
+        self.paydebt_series.setVisible(False)
+        self.invest_area.setVisible(False)
+        self.paydebt_area.setVisible(False)
+
+        # Show investment series
+        self.k401_series.setVisible(True)
+        self.roth_series.setVisible(True)
+        self.combined_series.setVisible(True)
+        self.k401_area.setVisible(True)
+        self.roth_area.setVisible(True)
+        self.combined_area.setVisible(True)
+
+        # Show axes
+        self.x_axis.setVisible(True)
+        self.x_axis.setTitleText("Years")
+        self.y_value_axis.setVisible(True)
+        self.y_value_axis.setTitleText("Portfolio Value ($)")
+
+        # Hide waterfall series
+        for series in getattr(self, '_waterfall_series', []):
+            series.setVisible(False)
+        if hasattr(self, '_waterfall_x_axis'):
+            self._waterfall_x_axis.setVisible(False)
+        if hasattr(self, '_waterfall_y_axis'):
+            self._waterfall_y_axis.setVisible(False)
+
+        self._update_investment_chart()
+
+    def _update_investment_chart(self):
+        """Update the investment growth comparison chart.
+
+        Compares 30-year growth of:
+        - 401k only: Pre-tax contributions, tax-deferred growth, taxed at withdrawal
+        - Roth IRA only: Post-tax contributions, tax-free growth
+        - Combined: Split between both for tax diversification
+        """
+        self.k401_series.clear()
+        self.roth_series.clear()
+        self.combined_series.clear()
+
+        # Get contribution amount from slider (this is additional 401k from selling assets)
+        # For this chart, we'll use the annual contribution capacity
+        additional_401k = self.contribution_slider.value()
+
+        # Get tax rate from filing status
+        gross = self.gross_income_input.value()
+        status = self.filing_status.currentData()
+
+        # Estimate marginal tax rate based on income
+        if status == 'married_joint':
+            if gross > 693750:
+                marginal_rate = 0.37
+            elif gross > 462500:
+                marginal_rate = 0.35
+            elif gross > 364200:
+                marginal_rate = 0.32
+            elif gross > 190750:
+                marginal_rate = 0.24
+            elif gross > 89450:
+                marginal_rate = 0.22
+            elif gross > 22000:
+                marginal_rate = 0.12
+            else:
+                marginal_rate = 0.10
+        else:  # single or head_household
+            if gross > 578125:
+                marginal_rate = 0.37
+            elif gross > 231250:
+                marginal_rate = 0.35
+            elif gross > 182100:
+                marginal_rate = 0.32
+            elif gross > 95375:
+                marginal_rate = 0.24
+            elif gross > 44725:
+                marginal_rate = 0.22
+            elif gross > 11000:
+                marginal_rate = 0.12
+            else:
+                marginal_rate = 0.10
+
+        # Assume 15% retirement tax rate (lower bracket in retirement)
+        retirement_tax_rate = 0.15
+
+        # Annual contribution - use max 401k + Roth IRA limit
+        max_401k = MAX_401K_CONTRIBUTION  # $23,000
+        max_roth = 7000  # 2024 Roth IRA limit
+
+        # Use the additional contribution from slider, up to max
+        annual_contribution = min(additional_401k, max_401k + max_roth) if additional_401k > 0 else max_401k
+
+        # Get risk level from combo box
+        risk_level = self.risk_combo.currentData()
+        investment_return = HISTORICAL_RETURNS.get(risk_level, 0.07)
+
+        # Get allocation percentages from sliders
+        k401_pct = self.k401_pct_slider.value() / 100.0
+        roth_pct = self.roth_pct_slider.value() / 100.0
+
+        # Years to simulate (30 years to retirement)
+        years = 30
+        self.x_axis.setRange(0, years)
+        self.x_axis.setTickCount(7)  # 0, 5, 10, 15, 20, 25, 30
+
+        max_value = 0
+
+        for year in range(years + 1):
+            # 401k (100%): Pre-tax contribution, grows tax-deferred, taxed at withdrawal
+            k401_balance = 0
+            for y in range(year):
+                k401_balance = (k401_balance + annual_contribution) * (1 + investment_return)
+            # After-tax value at withdrawal
+            k401_after_tax = k401_balance * (1 - retirement_tax_rate)
+
+            # Roth IRA (100%): Post-tax contribution, grows tax-free
+            # Contribution is post-tax, so we invest (1 - marginal_rate) of gross contribution
+            roth_contribution = annual_contribution * (1 - marginal_rate)
+            roth_balance = 0
+            for y in range(year):
+                roth_balance = (roth_balance + roth_contribution) * (1 + investment_return)
+            # No tax at withdrawal
+            roth_after_tax = roth_balance
+
+            # Combined: Use slider percentages for allocation
+            k401_portion = annual_contribution * k401_pct
+            roth_portion = annual_contribution * roth_pct * (1 - marginal_rate)
+            combined_k401 = 0
+            combined_roth = 0
+            for y in range(year):
+                combined_k401 = (combined_k401 + k401_portion) * (1 + investment_return)
+                combined_roth = (combined_roth + roth_portion) * (1 + investment_return)
+            combined_after_tax = combined_k401 * (1 - retirement_tax_rate) + combined_roth
+
+            self.k401_series.append(year, k401_after_tax)
+            self.roth_series.append(year, roth_after_tax)
+            self.combined_series.append(year, combined_after_tax)
+
+            max_value = max(max_value, k401_after_tax, roth_after_tax, combined_after_tax)
+
+        # Set Y axis range
+        self.y_value_axis.setRange(0, max(max_value * 1.1, 10000))
+
+        # Format large numbers
+        if max_value > 1000000:
+            self.y_value_axis.setLabelFormat("$%.1fM")
+        elif max_value > 1000:
+            self.y_value_axis.setLabelFormat("$%.0fk")
+        else:
+            self.y_value_axis.setLabelFormat("$%.0f")
 
     def _simulate_waterfall_timeline(self) -> Dict[str, Any]:
         """Simulate the complete debt payoff timeline, returning balance history for each debt.
@@ -2189,7 +2730,7 @@ class TaxSettingsPage(QWizardPage):
         if tax == 0:
             self.tax_owed_label.setStyleSheet("font-weight: bold; color: green;")
         else:
-            self.tax_owed_label.setStyleSheet("font-weight: bold; color: #cc0000;")
+            self.tax_owed_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.negative};")
 
         self.months_saved_label.setText(f"{months} months")
 
@@ -2200,7 +2741,7 @@ class TaxSettingsPage(QWizardPage):
         efund_allocation = self._get_efund_allocation()
         self.efund_allocation_label.setText(f"${efund_allocation:,.0f}")
         if efund_allocation > 0:
-            self.efund_allocation_label.setStyleSheet("font-weight: bold; color: #006699;")
+            self.efund_allocation_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.accent};")
         else:
             self.efund_allocation_label.setStyleSheet("font-weight: bold; color: #999;")
 
@@ -2232,13 +2773,13 @@ class TaxSettingsPage(QWizardPage):
             self.projection_401k_label.setToolTip(
                 f"${contributions_10y:,.0f} contributed + ${growth_10y:,.0f} growth (7% avg return)"
             )
-            self.projection_401k_label.setStyleSheet("font-weight: bold; color: #006600;")
+            self.projection_401k_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.positive};")
 
             self.projection_401k_20y_label.setText(f"${fv_20y:,.0f}")
             self.projection_401k_20y_label.setToolTip(
                 f"${contributions_20y:,.0f} contributed + ${growth_20y:,.0f} growth (7% avg return)"
             )
-            self.projection_401k_20y_label.setStyleSheet("font-weight: bold; color: #006600;")
+            self.projection_401k_20y_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.positive};")
         else:
             self.projection_401k_label.setText("$0")
             self.projection_401k_label.setToolTip("No additional 401k contributions")
@@ -2327,13 +2868,13 @@ class TaxSettingsPage(QWizardPage):
         if optimal_silver_price <= 0:
             # Already over headroom from non-silver gains
             self.optimal_silver_label.setText("Over limit")
-            self.optimal_silver_label.setStyleSheet("font-weight: bold; color: #cc0000;")
+            self.optimal_silver_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.negative};")
             self.optimal_silver_label.setToolTip(
                 "Non-silver gains already exceed LTCG headroom.\n"
                 "Any silver sale will incur 15% tax."
             )
             self.silver_diff_label.setText("N/A")
-            self.silver_diff_label.setStyleSheet("font-weight: bold; color: #cc0000;")
+            self.silver_diff_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.negative};")
         else:
             self.optimal_silver_label.setText(f"${optimal_silver_price:.2f}/oz")
             self.optimal_silver_label.setStyleSheet("font-weight: bold; color: #C0C0C0;")
@@ -2348,11 +2889,11 @@ class TaxSettingsPage(QWizardPage):
 
             if abs(price_diff) < 0.01:
                 self.silver_diff_label.setText("At optimal")
-                self.silver_diff_label.setStyleSheet("font-weight: bold; color: #006600;")
+                self.silver_diff_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.positive};")
             elif price_diff > 0:
                 # Silver needs to rise to reach optimal
                 self.silver_diff_label.setText(f"+${price_diff:.2f} ({pct_diff:+.1f}%)")
-                self.silver_diff_label.setStyleSheet("font-weight: bold; color: #006600;")
+                self.silver_diff_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.positive};")
                 self.silver_diff_label.setToolTip(
                     f"Silver needs to rise ${price_diff:.2f}/oz to reach the 0% tax threshold.\n"
                     f"Currently, you're ${abs(price_diff * total_silver_weight):,.0f} under the optimal value."
@@ -2360,7 +2901,7 @@ class TaxSettingsPage(QWizardPage):
             else:
                 # Silver is above optimal - will pay some tax
                 self.silver_diff_label.setText(f"${price_diff:.2f} ({pct_diff:+.1f}%)")
-                self.silver_diff_label.setStyleSheet("font-weight: bold; color: #cc6600;")
+                self.silver_diff_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.warning};")
                 excess_gain = abs(price_diff) * total_silver_weight
                 tax_on_excess = excess_gain * 0.15
                 self.silver_diff_label.setToolTip(
@@ -2420,16 +2961,16 @@ class TaxSettingsPage(QWizardPage):
             growth_pct = growth_needed * 100
 
             if growth_pct <= 5:
-                color = "#006600"
+                color = theme().palette.positive
                 qualifier = "easily achievable"
             elif growth_pct <= 15:
-                color = "#006600"
+                color = theme().palette.positive
                 qualifier = "reasonably achievable"
             elif growth_pct <= 30:
-                color = "#cc6600"
+                color = theme().palette.warning
                 qualifier = "optimistic but possible"
             else:
-                color = "#cc0000"
+                color = theme().palette.negative
                 qualifier = "would require significant rally"
 
             self.silver_growth_label.setText(f"+{growth_pct:.1f}% needed")
@@ -2443,7 +2984,7 @@ class TaxSettingsPage(QWizardPage):
             )
         elif optimal_price > 0 and optimal_price <= current_price:
             self.silver_growth_label.setText("Already optimal")
-            self.silver_growth_label.setStyleSheet("font-weight: bold; color: #006600;")
+            self.silver_growth_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.positive};")
             self.silver_growth_label.setToolTip(
                 "Current silver price is at or above the optimal 0% tax price.\n"
                 "You could sell now and stay within the 0% LTCG bracket\n"
@@ -2469,9 +3010,8 @@ class TaxSettingsPage(QWizardPage):
         self._update_silver_outlook_from_slider()
 
         # Trigger full recalculation with the new silver price
-        self._update_chart()
+        self._update_current_chart()
         self._update_display()
-        self._update_marker()
 
     def _update_silver_outlook_from_slider(self):
         """Update silver outlook display based on current slider value."""
@@ -2489,13 +3029,13 @@ class TaxSettingsPage(QWizardPage):
         # Update change label with color coding
         if change_pct < 0:
             self.silver_change_label.setText(f"{change_pct}%")
-            self.silver_change_label.setStyleSheet("font-weight: bold; color: #cc6600;")
+            self.silver_change_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.warning};")
         elif change_pct > 0:
             self.silver_change_label.setText(f"+{change_pct}%")
-            self.silver_change_label.setStyleSheet("font-weight: bold; color: #006600;")
+            self.silver_change_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.positive};")
         else:
             self.silver_change_label.setText("0%")
-            self.silver_change_label.setStyleSheet("font-weight: bold; color: #0066cc;")
+            self.silver_change_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.accent};")
 
         # Calculate projected price
         projected_price = current_price * (1 + change_pct / 100)
@@ -2517,7 +3057,7 @@ class TaxSettingsPage(QWizardPage):
         # Update tax label with color coding
         if tax == 0:
             self.silver_tax_at_price_label.setText(f"$0 (0%)")
-            self.silver_tax_at_price_label.setStyleSheet("font-weight: bold; color: #006600;")
+            self.silver_tax_at_price_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.positive};")
             self.silver_tax_at_price_label.setToolTip(
                 f"At ${projected_price:.2f}/oz:\n"
                 f"Silver value: ${silver_value:,.0f}\n"
@@ -2529,7 +3069,7 @@ class TaxSettingsPage(QWizardPage):
         else:
             excess = total_gain - headroom
             self.silver_tax_at_price_label.setText(f"${tax:,.0f}")
-            self.silver_tax_at_price_label.setStyleSheet("font-weight: bold; color: #cc0000;")
+            self.silver_tax_at_price_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.negative};")
             self.silver_tax_at_price_label.setToolTip(
                 f"At ${projected_price:.2f}/oz:\n"
                 f"Silver value: ${silver_value:,.0f}\n"
@@ -2599,9 +3139,16 @@ class TaxSettingsPage(QWizardPage):
         # (interest saved vs keeping the debt)
         interest_saved_if_payoff = self._calculate_interest_saved_with_payoff(net_proceeds)
 
-        # Net difference: investment growth minus interest that would accrue
+        # Calculate value of freed-up cashflow invested
+        # When debt is paid off early, monthly payments are freed up and can be invested
+        freed_cashflow_invested = self._calculate_freed_cashflow_invested(net_proceeds, years)
+
+        # Total benefit of paying off debt = interest saved + freed cashflow invested
+        total_debt_payoff_benefit = interest_saved_if_payoff + freed_cashflow_invested
+
+        # Net difference: investment growth minus total debt payoff benefit
         # If positive, investing is better; if negative, paying debt is better
-        net_difference = investment_growth - interest_saved_if_payoff
+        net_difference = investment_growth - total_debt_payoff_benefit
 
         # Update UI labels
         self.invest_10y_label.setText(f"${investment_value:,.0f}")
@@ -2618,17 +3165,32 @@ class TaxSettingsPage(QWizardPage):
             f"(This is interest avoided, not total debt interest)"
         )
 
+        self.cashflow_invested_label.setText(f"${freed_cashflow_invested:,.0f}")
+        self.cashflow_invested_label.setToolTip(
+            f"When debt is paid off, monthly payments are freed up.\n"
+            f"If those freed payments are invested at 7%:\n"
+            f"Value after {years} years: ${freed_cashflow_invested:,.0f}\n\n"
+            f"Total debt payoff benefit:\n"
+            f"  Interest saved: ${interest_saved_if_payoff:,.0f}\n"
+            f"  + Cashflow invested: ${freed_cashflow_invested:,.0f}\n"
+            f"  = ${total_debt_payoff_benefit:,.0f}"
+        )
+
         if net_difference >= 0:
             self.net_diff_label.setText(f"+${net_difference:,.0f}")
-            self.net_diff_label.setStyleSheet("font-weight: bold; color: #006600;")
+            self.net_diff_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.positive};")
             self.net_diff_label.setToolTip(
-                f"Investment growth exceeds debt interest by ${net_difference:,.0f}\n"
+                f"Investment growth: ${investment_growth:,.0f}\n"
+                f"Debt payoff benefit: ${total_debt_payoff_benefit:,.0f}\n"
+                f"  (Interest saved + freed cashflow invested)\n\n"
+                f"Net advantage for investing: ${net_difference:,.0f}\n"
                 f"Over 10 years, investing MAY be more profitable."
             )
             self.strategy_rec_label.setText("Consider investing")
-            self.strategy_rec_label.setStyleSheet("font-weight: bold; font-size: 9px; color: #006600;")
+            self.strategy_rec_label.setStyleSheet(f"font-weight: bold; font-size: 9px; color: {theme().palette.positive};")
             self.strategy_rec_label.setToolTip(
-                "Based on historical 7% returns vs your debt interest rates,\n"
+                "Based on historical 7% returns vs your debt interest rates\n"
+                "(including freed-up cashflow that could be invested),\n"
                 "investing the proceeds may yield higher returns.\n\n"
                 "HOWEVER: Paying off debt provides guaranteed 'return'\n"
                 "equal to your interest rate, while investment returns\n"
@@ -2636,17 +3198,20 @@ class TaxSettingsPage(QWizardPage):
             )
         else:
             self.net_diff_label.setText(f"-${abs(net_difference):,.0f}")
-            self.net_diff_label.setStyleSheet("font-weight: bold; color: #cc0000;")
+            self.net_diff_label.setStyleSheet(f"font-weight: bold; color: {theme().palette.negative};")
             self.net_diff_label.setToolTip(
-                f"Debt interest exceeds investment growth by ${abs(net_difference):,.0f}\n"
+                f"Investment growth: ${investment_growth:,.0f}\n"
+                f"Debt payoff benefit: ${total_debt_payoff_benefit:,.0f}\n"
+                f"  (Interest saved + freed cashflow invested)\n\n"
+                f"Net advantage for debt payoff: ${abs(net_difference):,.0f}\n"
                 f"Paying off debt is likely the better financial choice."
             )
             self.strategy_rec_label.setText("Pay off debt")
-            self.strategy_rec_label.setStyleSheet("font-weight: bold; font-size: 9px; color: #0066cc;")
+            self.strategy_rec_label.setStyleSheet(f"font-weight: bold; font-size: 9px; color: {theme().palette.accent};")
             self.strategy_rec_label.setToolTip(
-                "Your debt interest rates are high enough that paying off\n"
-                "debt provides a better guaranteed 'return' than the\n"
-                "expected 7% market return.\n\n"
+                "When accounting for both interest saved AND the value of\n"
+                "freed-up monthly payments invested, paying off debt\n"
+                "provides better returns than the expected 7% market return.\n\n"
                 "Debt payoff is the mathematically optimal choice."
             )
 
@@ -2659,6 +3224,9 @@ class TaxSettingsPage(QWizardPage):
         self.debt_interest_label.setText("N/A")
         self.debt_interest_label.setStyleSheet(style)
         self.debt_interest_label.setToolTip(reason)
+        self.cashflow_invested_label.setText("N/A")
+        self.cashflow_invested_label.setStyleSheet(style)
+        self.cashflow_invested_label.setToolTip(reason)
         self.net_diff_label.setText("N/A")
         self.net_diff_label.setStyleSheet(style)
         self.net_diff_label.setToolTip(reason)
@@ -2742,6 +3310,99 @@ class TaxSettingsPage(QWizardPage):
 
         # Interest saved = baseline - with_payoff
         return max(0, baseline_interest - payoff_interest)
+
+    def _calculate_freed_cashflow_invested(self, lump_sum: float, years: int = 10) -> float:
+        """Calculate value of freed-up monthly payments invested over time.
+
+        When debt is paid off early, the monthly payments are freed up and could
+        be invested. This calculates the future value of those freed payments
+        invested at 7% for the remainder of the period.
+
+        Returns the total value of freed cashflow invested.
+        """
+        if not self._liabilities or lump_sum <= 0:
+            return 0
+
+        investment_return = HISTORICAL_RETURNS['moderate']  # 7% annual
+        monthly_return = (1 + investment_return) ** (1/12) - 1
+        total_months = years * 12
+        max_sim_months = 600  # 50 year cap
+
+        # Calculate payoff month for each debt WITHOUT lump sum (baseline)
+        baseline_payoff_months = {}
+        balances_baseline = {l.id: l.current_balance for l in self._liabilities}
+
+        month = 0
+        while any(b > 0.01 for b in balances_baseline.values()) and month < max_sim_months:
+            month += 1
+            for l in self._liabilities:
+                if balances_baseline[l.id] > 0:
+                    interest = balances_baseline[l.id] * l.monthly_interest_rate
+                    balances_baseline[l.id] += interest
+                    pmt = min(l.monthly_payment, balances_baseline[l.id])
+                    balances_baseline[l.id] -= pmt
+                    if balances_baseline[l.id] <= 0.01 and l.id not in baseline_payoff_months:
+                        baseline_payoff_months[l.id] = month
+
+        # For debts that never pay off in simulation, set to max
+        for l in self._liabilities:
+            if l.id not in baseline_payoff_months:
+                baseline_payoff_months[l.id] = max_sim_months
+
+        # Calculate payoff month for each debt WITH lump sum (avalanche method)
+        lumpsum_payoff_months = {}
+        balances_payoff = {l.id: l.current_balance for l in self._liabilities}
+        remaining_lump = lump_sum
+
+        # Apply lump sum to debts in order of interest rate (highest first)
+        sorted_liabilities = sorted(self._liabilities, key=lambda x: x.interest_rate, reverse=True)
+        for l in sorted_liabilities:
+            if remaining_lump <= 0:
+                break
+            payoff_amount = min(remaining_lump, balances_payoff[l.id])
+            balances_payoff[l.id] -= payoff_amount
+            remaining_lump -= payoff_amount
+            # If fully paid off immediately
+            if balances_payoff[l.id] <= 0.01:
+                lumpsum_payoff_months[l.id] = 0
+
+        # Simulate remaining payoff
+        month = 0
+        while any(b > 0.01 for b in balances_payoff.values()) and month < max_sim_months:
+            month += 1
+            for l in self._liabilities:
+                if balances_payoff[l.id] > 0:
+                    interest = balances_payoff[l.id] * l.monthly_interest_rate
+                    balances_payoff[l.id] += interest
+                    pmt = min(l.monthly_payment, balances_payoff[l.id])
+                    balances_payoff[l.id] -= pmt
+                    if balances_payoff[l.id] <= 0.01 and l.id not in lumpsum_payoff_months:
+                        lumpsum_payoff_months[l.id] = month
+
+        # For debts that never pay off, set to max
+        for l in self._liabilities:
+            if l.id not in lumpsum_payoff_months:
+                lumpsum_payoff_months[l.id] = max_sim_months
+
+        # Calculate value of freed cashflow invested
+        # For each month, determine which debts are paid off with lump sum but not baseline
+        # Those monthly payments are "freed" and can be invested
+        total_invested_value = 0.0
+
+        for month in range(1, total_months + 1):
+            freed_this_month = 0.0
+            for l in self._liabilities:
+                # If debt is paid off with lump sum but not yet without
+                if lumpsum_payoff_months[l.id] < month <= baseline_payoff_months[l.id]:
+                    freed_this_month += l.monthly_payment
+
+            if freed_this_month > 0:
+                # Invest this month's freed cashflow for remaining months
+                months_to_grow = total_months - month
+                future_value = freed_this_month * ((1 + monthly_return) ** months_to_grow)
+                total_invested_value += future_value
+
+        return total_invested_value
 
     def _set_optimal(self):
         """Set slider to optimal value for 0% LTCG."""

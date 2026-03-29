@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush, QAction
 from ...database.models import Liability
+from ..theme import theme
 
 
 class LiabilityTableWidget(QWidget):
@@ -18,6 +19,7 @@ class LiabilityTableWidget(QWidget):
     liability_double_clicked = pyqtSignal(int)  # liability_id
     edit_requested = pyqtSignal(int)  # liability_id
     delete_requested = pyqtSignal(int)  # liability_id
+    payment_history_requested = pyqtSignal(int)  # liability_id
 
     COLUMNS = [
         ('Name', 150),
@@ -107,7 +109,8 @@ class LiabilityTableWidget(QWidget):
         # Current Balance
         bal_item = QTableWidgetItem(f"${liability.current_balance:,.2f}")
         bal_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        bal_item.setForeground(QBrush(QColor('#c62828')))  # Red for debt
+        p = theme().palette
+        bal_item.setForeground(QBrush(QColor(p.negative)))  # Red for debt
         self.table.setItem(row, 4, bal_item)
 
         # Paid Off (original - current)
@@ -115,7 +118,7 @@ class LiabilityTableWidget(QWidget):
         paid_percent = (paid / liability.original_amount * 100) if liability.original_amount > 0 else 0
         paid_item = QTableWidgetItem(f"${paid:,.2f} ({paid_percent:.1f}%)")
         paid_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        paid_item.setForeground(QBrush(QColor('#2e7d32')))  # Green for paid
+        paid_item.setForeground(QBrush(QColor(p.positive)))  # Green for paid
         self.table.setItem(row, 5, paid_item)
 
         # Interest Rate
@@ -191,5 +194,11 @@ class LiabilityTableWidget(QWidget):
         delete_action = QAction('Delete', self)
         delete_action.triggered.connect(lambda: self.delete_requested.emit(liability_id))
         menu.addAction(delete_action)
+
+        menu.addSeparator()
+
+        history_action = QAction('Payment History', self)
+        history_action.triggered.connect(lambda: self.payment_history_requested.emit(liability_id))
+        menu.addAction(history_action)
 
         menu.exec(self.table.mapToGlobal(position))
