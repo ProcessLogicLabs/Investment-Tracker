@@ -3,7 +3,7 @@
 import sqlite3
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from .models import Asset, PriceHistory, Liability, Income, Expense, Goal, PaymentHistory, Transaction, get_connection
+from .models import Asset, PriceHistory, Liability, Income, Expense, Goal, PaymentHistory, Transaction, AssetSale, get_connection
 
 
 class AssetOperations:
@@ -1812,3 +1812,192 @@ class TransactionOperations:
         if row and row['count'] > 0:
             return {'count': row['count'], 'total': row['total']}
         return {}
+
+
+class AssetSaleOperations:
+    """CRUD operations for asset sales."""
+
+    @staticmethod
+    def _row_to_sale(row) -> AssetSale:
+        return AssetSale(
+            id=row['id'],
+            asset_id=row['asset_id'],
+            asset_name=row['asset_name'],
+            asset_type=row['asset_type'],
+            symbol=row['symbol'] or '',
+            sale_date=row['sale_date'],
+            quantity_sold=row['quantity_sold'],
+            sale_price_per_unit=row['sale_price_per_unit'],
+            total_proceeds=row['total_proceeds'],
+            cost_basis_sold=row['cost_basis_sold'],
+            buyer_name=row['buyer_name'] or '',
+            notes=row['notes'] or '',
+            created_at=row['created_at']
+        )
+
+    @staticmethod
+    def record_sale(asset_id: int, sale_date: str, quantity_sold: float,
+                    sale_price_per_unit: float, buyer_name: str = "",
+                    notes: str = "") -> Dict[str, Any]:
+        """Record a sale of an asset.
+
+        Reduces the asset's quantity by quantity_sold. If quantity reaches zero,
+        the asset is deleted. Also creates a Transaction record for the income.
+
+        Returns a dict with the sale_id, asset_deleted flag, and computed fields.
+        """
+        asset = AssetOperations.get_by_id(asset_id)
+        if not asset:
+            raise ValueError(f"Asset with id {asset_id} not found")
+
+        total_proceeds = quantity_sold * sale_price_per_unit
+
+        # Calculate cost basis proportionally
+        if asset.is_balance_only:
+            # For balance-only assets, cost basis is taken from the balance being sold
+            cost_basis_sold = min(quantity_sold, asset.current_price)
+        elif asset.quantity > 0:
+            cost_per_unit = asset.purchase_price
+            cost_basis_sold = quantity_sold * cost_per_unit
+        else:
+            cost_basis_sold = 0.0
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        try:
+            # Insert the sale record
+            cursor.execute("""
+                INSERT INTO asset_sales (
+                    asset_id, asset_name, asset_type, symbol, sale_date,
+                    quantity_sold, sale_price_per_unit, total_proceeds,
+                    cost_basis_sold, buyer_name, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                asset_id, asset.name, asset.asset_type, asset.symbol,
+                sale_date, quantity_sold, sale_price_per_unit, total_proceeds,
+                cost_basis_sold, buyer_name, notes
+            ))
+            sale_id = cursor.lastrowid
+
+            # Update or delete the asset
+            asset_deleted = False
+            if asset.is_balance_only:
+                new_balance = asset.current_price - total_proceeds
+                if new_balance <= 0.01:
+                    cursor.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
+                    asset_deleted = True
+                else:
+                    cursor.execute(
+                        "UPDATE assets SET current_price = ?, last_updated = ? WHERE id = ?",
+                        (new_balance, datetime.now().isoformat(), asset_id)
+                    )
+            else:
+                new_quantity = asset.quantity - quantity_sold
+                if new_quantity <= 0.0001:
+                    cursor.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
+                    asset_deleted = True
+                else:
+                    cursor.execute(
+                        "UPDATE assets SET quantity = ?, last_updated = ? WHERE id = ?",
+                        (new_quantity, datetime.now().isoformat(), asset_id)
+                    )
+
+            # Create a Transaction record for the sale proceeds (income)
+            buyer_part = f" to {buyer_name}" if buyer_name else ""
+            description = f"Sale of {asset.name}{buyer_part}"
+            cursor.execute("""
+                INSERT INTO transactions (
+                    transaction_date, description, amount, category,
+                    transaction_type, account_name, original_description,
+                    is_income, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                sale_date, description, total_proceeds, 'income',
+                'asset_sale', buyer_name or 'Asset Sale', description,
+                1, f"Sale of {quantity_sold} @ ${sale_price_per_unit:.2f}. {notes}".strip()
+            ))
+
+            conn.commit()
+
+            return {
+                'sale_id': sale_id,
+                'asset_deleted': asset_deleted,
+                'total_proceeds': total_proceeds,
+                'cost_basis_sold': cost_basis_sold,
+                'profit_loss': total_proceeds - cost_basis_sold,
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_all() -> List[AssetSale]:
+        """Get all asset sales, most recent first."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM asset_sales ORDER BY sale_date DESC, id DESC")
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [AssetSaleOperations._row_to_sale(row) for row in rows]
+
+    @staticmethod
+    def get_by_id(sale_id: int) -> Optional[AssetSale]:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM asset_sales WHERE id = ?", (sale_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        return AssetSaleOperations._row_to_sale(row) if row else None
+
+    @staticmethod
+    def get_by_asset(asset_id: int) -> List[AssetSale]:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM asset_sales WHERE asset_id = ? ORDER BY sale_date DESC", (asset_id,))
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [AssetSaleOperations._row_to_sale(row) for row in rows]
+
+    @staticmethod
+    def delete(sale_id: int) -> bool:
+        """Delete a sale record (does not restore the asset or transaction)."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM asset_sales WHERE id = ?", (sale_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    @staticmethod
+    def get_summary() -> Dict[str, Any]:
+        """Aggregate stats across all sales."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT COUNT(*) as count,
+                   COALESCE(SUM(total_proceeds), 0) as total_proceeds,
+                   COALESCE(SUM(cost_basis_sold), 0) as total_cost_basis,
+                   COALESCE(SUM(total_proceeds - cost_basis_sold), 0) as total_profit
+            FROM asset_sales
+        """)
+        row = cursor.fetchone()
+        conn.close()
+
+        return {
+            'count': row['count'],
+            'total_proceeds': row['total_proceeds'],
+            'total_cost_basis': row['total_cost_basis'],
+            'total_profit': row['total_profit'],
+        }

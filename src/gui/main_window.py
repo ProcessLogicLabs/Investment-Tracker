@@ -9,7 +9,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QIcon
 
 from ..database.models import init_database
-from ..database.operations import AssetOperations, PriceHistoryOperations, SettingsOperations, LiabilityOperations, IncomeOperations, ExpenseOperations, GoalOperations, PaymentOperations, TransactionOperations
+from ..database.operations import AssetOperations, PriceHistoryOperations, SettingsOperations, LiabilityOperations, IncomeOperations, ExpenseOperations, GoalOperations, PaymentOperations, TransactionOperations, AssetSaleOperations
 from ..services.updater import ScheduledUpdater
 from .theme import ThemeManager, theme
 from .widgets.asset_table import AssetTableWidget
@@ -166,6 +166,16 @@ class MainWindow(QMainWindow):
 
         asset_menu.addSeparator()
 
+        sell_action = QAction("&Sell Asset...", self)
+        sell_action.triggered.connect(self._sell_selected_asset)
+        asset_menu.addAction(sell_action)
+
+        sales_history_action = QAction("Sales &History...", self)
+        sales_history_action.triggered.connect(self._show_sales_history)
+        asset_menu.addAction(sales_history_action)
+
+        asset_menu.addSeparator()
+
         refresh_action = QAction("&Refresh Prices", self)
         refresh_action.setShortcut("F5")
         refresh_action.triggered.connect(self._refresh_prices)
@@ -225,6 +235,12 @@ class MainWindow(QMainWindow):
         delete_expense_action = QAction("&Delete Expense", self)
         delete_expense_action.triggered.connect(self._delete_selected_expense)
         expense_menu.addAction(delete_expense_action)
+
+        expense_menu.addSeparator()
+
+        budget_wizard_action = QAction("Create &Budget from Transactions...", self)
+        budget_wizard_action.triggered.connect(self._show_budget_wizard)
+        expense_menu.addAction(budget_wizard_action)
 
         # Goals menu
         goals_menu = menubar.addMenu("&Goals")
@@ -391,6 +407,7 @@ class MainWindow(QMainWindow):
         self.asset_table.asset_double_clicked.connect(self._edit_asset)
         self.asset_table.edit_requested.connect(self._edit_asset)
         self.asset_table.delete_requested.connect(self._delete_asset)
+        self.asset_table.sell_requested.connect(self._sell_asset)
 
         # Liability table signals
         self.liability_table.liability_double_clicked.connect(self._edit_liability)
@@ -550,6 +567,20 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.information(self, "Delete Asset", "Please select an asset to delete.")
 
+    def _sell_selected_asset(self):
+        """Open the Sell dialog for the currently selected asset."""
+        asset_id = self.asset_table.get_selected_asset_id()
+        if asset_id:
+            self._sell_asset(asset_id)
+        else:
+            QMessageBox.information(self, "Sell Asset", "Please select an asset to sell.")
+
+    def _show_sales_history(self):
+        """Show the sales history dialog."""
+        from .dialogs.sales_history import SalesHistoryDialog
+        dialog = SalesHistoryDialog(self)
+        dialog.exec()
+
     def _delete_asset(self, asset_id: int):
         """Delete an asset after confirmation."""
         confirm_delete = SettingsOperations.get('confirm_delete', 'true') == 'true'
@@ -571,6 +602,27 @@ class MainWindow(QMainWindow):
         AssetOperations.delete(asset_id)
         self._load_data()
         self.status_label.setText("Asset deleted")
+
+    def _sell_asset(self, asset_id: int):
+        """Record a sale of an asset."""
+        from .dialogs.sell_asset import SellAssetDialog
+        asset = AssetOperations.get_by_id(asset_id)
+        if not asset:
+            return
+        dialog = SellAssetDialog(self, asset)
+        if dialog.exec():
+            result = dialog.sale_result
+            if result:
+                pl = result['profit_loss']
+                sign = "+" if pl >= 0 else "-"
+                status = (
+                    f"Sale recorded: ${result['total_proceeds']:,.2f} "
+                    f"({sign}${abs(pl):,.2f} P/L)"
+                )
+                if result['asset_deleted']:
+                    status += " - asset removed"
+                self.status_label.setText(status)
+                self._load_data()
 
     def _add_liability(self):
         """Show add liability dialog."""
@@ -744,6 +796,20 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             self._load_data()
             self.status_label.setText("Expense added successfully")
+
+    def _show_budget_wizard(self):
+        """Create a budget from imported transaction data."""
+        from .dialogs.budget_wizard import BudgetWizardDialog
+        dialog = BudgetWizardDialog(self)
+        if dialog.exec():
+            self._load_data()
+            parts = []
+            if dialog.created_count:
+                parts.append(f"{dialog.created_count} created")
+            if dialog.replaced_count:
+                parts.append(f"{dialog.replaced_count} replaced")
+            if parts:
+                self.status_label.setText(f"Budget updated: {', '.join(parts)}")
 
     def _edit_selected_expense(self):
         """Edit the currently selected expense."""

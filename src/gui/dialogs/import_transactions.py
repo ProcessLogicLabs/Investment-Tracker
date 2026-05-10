@@ -91,7 +91,7 @@ class ImportTransactionsDialog(QDialog):
         """Open file dialog to select a CSV."""
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Select CSV File", "",
-            "CSV Files (*.csv);;All Files (*)"
+            "CSV Files (*.csv *.CSV);;All Files (*)"
         )
         if file_path:
             self._file_path = file_path

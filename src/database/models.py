@@ -98,6 +98,36 @@ class PriceHistory:
 
 
 @dataclass
+class AssetSale:
+    """Represents a completed asset sale."""
+    id: Optional[int] = None
+    asset_id: Optional[int] = None  # None if the asset has been deleted
+    asset_name: str = ""  # Denormalized so history survives asset deletion
+    asset_type: str = ""
+    symbol: str = ""
+    sale_date: Optional[str] = None
+    quantity_sold: float = 0.0
+    sale_price_per_unit: float = 0.0
+    total_proceeds: float = 0.0
+    cost_basis_sold: float = 0.0
+    buyer_name: str = ""
+    notes: str = ""
+    created_at: Optional[str] = None
+
+    @property
+    def profit_loss(self) -> float:
+        """Profit or loss on the sale."""
+        return self.total_proceeds - self.cost_basis_sold
+
+    @property
+    def profit_loss_percent(self) -> float:
+        """Profit or loss as a percentage of cost basis."""
+        if self.cost_basis_sold == 0:
+            return 0.0
+        return (self.profit_loss / self.cost_basis_sold) * 100
+
+
+@dataclass
 class Income:
     """Represents an income source."""
     id: Optional[int] = None
@@ -610,6 +640,36 @@ def init_database():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_price_history_timestamp
         ON price_history(timestamp)
+    """)
+
+    # Create asset_sales table (records of asset sales)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS asset_sales (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            asset_id INTEGER,
+            asset_name TEXT NOT NULL,
+            asset_type TEXT NOT NULL,
+            symbol TEXT DEFAULT '',
+            sale_date DATE NOT NULL,
+            quantity_sold REAL NOT NULL DEFAULT 0,
+            sale_price_per_unit REAL NOT NULL DEFAULT 0,
+            total_proceeds REAL NOT NULL DEFAULT 0,
+            cost_basis_sold REAL NOT NULL DEFAULT 0,
+            buyer_name TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE SET NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_asset_sales_date
+        ON asset_sales(sale_date)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_asset_sales_asset_id
+        ON asset_sales(asset_id)
     """)
 
     conn.commit()

@@ -19,6 +19,7 @@ class AssetTableWidget(QWidget):
     asset_double_clicked = pyqtSignal(int)  # asset_id
     edit_requested = pyqtSignal(int)  # asset_id
     delete_requested = pyqtSignal(int)  # asset_id
+    sell_requested = pyqtSignal(int)  # asset_id
 
     COLUMNS = [
         ('Name', 150),
@@ -230,6 +231,11 @@ class AssetTableWidget(QWidget):
 
     def _show_context_menu(self, position):
         """Show right-click context menu."""
+        # Select the row under the cursor so right-click works without a prior click
+        item = self.table.itemAt(position)
+        if item is not None:
+            self.table.selectRow(item.row())
+
         asset_id = self.get_selected_asset_id()
         if asset_id is None:
             return
@@ -239,6 +245,12 @@ class AssetTableWidget(QWidget):
         edit_action = QAction('Edit', self)
         edit_action.triggered.connect(lambda: self.edit_requested.emit(asset_id))
         menu.addAction(edit_action)
+
+        sell_action = QAction('Sell...', self)
+        sell_action.triggered.connect(lambda: self.sell_requested.emit(asset_id))
+        menu.addAction(sell_action)
+
+        menu.addSeparator()
 
         delete_action = QAction('Delete', self)
         delete_action.triggered.connect(lambda: self.delete_requested.emit(asset_id))
